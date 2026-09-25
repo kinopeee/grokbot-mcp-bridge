@@ -87,7 +87,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 ## 6. 受信 webhook（Grok Bot → ブリッジ、能動配信）
 
 `POST /hooks/grokbot`
-- 認証: `X-Signature-256: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` または `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
+- 認証: `X-Webhook-Signature: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` または `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
 - 本文に `callback_url`（または `reply_url` / `response_url`）があれば、公開 https URL のみ（SSRF ガード: private/loopback/link-local/自ホスト等は拒否）に `{"ok":true,"answer":"受信しました (event_id=N)"}` を POST。
 - ない場合は `{"ok":true,"event_id":N,"callback":"none","note":"コールバックURLなし"}` を返す。
 

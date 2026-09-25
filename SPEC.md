@@ -87,7 +87,7 @@ If no answer arrives within 45 seconds, the bridge returns `answer_status: "pend
 ## 6. Inbound webhook (Grok Bot → bridge, push delivery)
 
 `POST /hooks/grokbot`
-- Authentication: `X-Signature-256: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` or `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
+- Authentication: `X-Webhook-Signature: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` or `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
 - If the body contains `callback_url` (or `reply_url` / `response_url`), the bridge POSTs `{"ok":true,"answer":"受信しました (event_id=N)"}` ("received") to it, but only to public https URLs (SSRF guard: private, loopback, link-local, the bridge's own host, etc. are rejected).
 - Otherwise it returns `{"ok":true,"event_id":N,"callback":"none","note":"コールバックURLなし"}` ("no callback URL").
 
