@@ -359,6 +359,136 @@ def test_extract_answer_text():
     assert main._extract_answer_text({"ok": True}) is None
 
 
+def test_body_too_large(client):
+    big = b'{"x":"' + b"a" * (300 * 1024) + b'"}'
+    response = client.post(
+        "/callbacks/some-token", content=big,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "body_too_large"
+    response = client.post("/hooks/grokbot", content=big, headers=signed_headers(big))
+    assert response.status_code == 413
+    assert response.json()["error"] == "body_too_large"
+
+
+def test_expired_callback(client, monkeypatch):
+    async def fake_post(_self, url, **kwargs):
+        return httpx.Response(
+            200,
+            json={"success": True},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
+    result = json.loads(asyncio.run(
+        main.ask_grokbot({"prompt": "expired"}, wait_seconds=0)
+    ))
+    monkeypatch.setattr(main, "CALLBACK_TTL_SECONDS", -1)
+    path = urlparse(result["callback_url"]).path
+    response = client.post(path, json={"ok": True, "run_id": result["run_id"]})
+    assert response.status_code == 410
+    assert response.json()["error"] == "callback_expired"
+
+
+def test_non_ascii_credentials_do_not_500(client):
+    response = client.post(
+        "/mcp",
+        headers={
+            "x-api-key": "test-mcp",
+            "content-type": "application/json",
+            "accept": "application/json, text/event-stream",
+        },
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+    )
+    assert response.status_code != 401
+    assert client.post(
+        "/mcp", headers={"authorization": "Bearer é".encode("latin-1")}
+    ).status_code == 401
+    assert client.post(
+        "/hooks/grokbot", content=b"{}",
+        headers={"authorization": "Bearer é".encode("latin-1")},
+    ).status_code == 401
+
+
+def timestamped_headers(body: bytes, timestamp: int) -> dict[str, str]:
+    signature = hmac.new(
+        b"test-inbound", f"{timestamp}.".encode() + body, hashlib.sha256
+    ).hexdigest()
+    return {
+        "content-type": "application/json",
+        "x-webhook-signature": f"sha256={signature}",
+        "x-webhook-timestamp": str(timestamp),
+    }
+
+
+def test_timestamped_signature(client):
+    body = b'{"event":"finished"}'
+    now = int(time.time())
+    response = client.post(
+        "/hooks/grokbot", content=body, headers=timestamped_headers(body, now)
+    )
+    assert response.status_code == 200
+
+    response = client.post(
+        "/hooks/grokbot", content=body, headers=timestamped_headers(body, now - 600)
+    )
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_signature"
+
+    legacy_headers = signed_headers(body)
+    legacy_headers["x-webhook-timestamp"] = str(now)
+    response = client.post("/hooks/grokbot", content=body, headers=legacy_headers)
+    assert response.status_code == 401
+
+    response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
+    assert response.status_code == 200
+
+
+def test_inspect_callback_url_returns_addresses(monkeypatch):
+    def public_dns(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
+    safe, reason, addresses = main._inspect_callback_url("https://example.com/")
+    assert safe is True
+    assert reason == "ok"
+    assert addresses == ["93.184.216.34"]
+    assert main._is_safe_callback_url("https://example.com/") == (True, "ok")
+
+
+def test_inbound_callback_pinned_delivery(client, monkeypatch):
+    captured = []
+
+    def local_dns(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+
+    async def fake_post(_self, url, **kwargs):
+        captured.append((str(url), kwargs))
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(main.socket, "getaddrinfo", local_dns)
+    monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
+
+    body = json.dumps({"callback_url": "http://example.test:8123/cb"}).encode()
+    response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
+    assert response.status_code == 200
+    assert response.json()["callback"] == "delivered"
+    url, kwargs = captured[-1]
+    assert urlparse(url).hostname == "127.0.0.1"
+    assert urlparse(url).port == 8123
+    assert kwargs["headers"]["Host"] == "example.test:8123"
+
+    body = json.dumps({"callback_url": "https://example.test/cb"}).encode()
+    response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
+    assert response.status_code == 200
+    assert response.json()["callback"] == "delivered"
+    url, kwargs = captured[-1]
+    assert urlparse(url).hostname == "127.0.0.1"
+    assert kwargs["headers"]["Host"] == "example.test"
+    assert kwargs["extensions"] == {"sni_hostname": "example.test"}
+
+
 def test_ask_grokbot_pending_summary(client, monkeypatch):
     async def fake_post(_self, url, **kwargs):
         return httpx.Response(

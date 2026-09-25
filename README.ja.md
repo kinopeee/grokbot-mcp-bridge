@@ -102,5 +102,6 @@ Grok Bot は次のような JSON を POST します。
 
 ```bash
 uv run --extra dev pytest -q               # テスト
+uv lock && uv export --no-dev --format requirements-txt --no-emit-project -o requirements.txt   # 依存関係のピン留めを更新
 flyctl deploy --remote-only --ha=false     # デプロイ（app / region は fly.toml）
 ```
