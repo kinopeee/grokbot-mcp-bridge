@@ -180,6 +180,21 @@ Otherwise, POST without a Bearer token.
 3. If the caller does not supply them, the bridge auto-attaches `callback_url` / `reply_url` / `response_url` (the token-scoped `/callbacks/{token}`)
 4. After receiving the callback, resolve the wait for that UUID and return the text to Poke as the MCP `tools/call` result (if it does not arrive within `wait_seconds`, `pending` is returned; collect it with `wait_for_grokbot_answer`)
 
+What Poke actually sends (`tools/call`):
+
+```json
+{"name": "ask_grokbot", "arguments": {"payload": {"message": "Introduce yourself briefly."}, "wait_seconds": 60}}
+```
+
+`payload` is forwarded to the Grok Bot webhook as-is (plus `run_id` / `request_id` / callback URLs), so put the request text in `message`. `wait_seconds` is clamped to 0–120. The result is a JSON string:
+
+| `answer_status` | What Poke should do |
+|---|---|
+| `answered` | Show `answer_text` |
+| `pending` | Call `wait_for_grokbot_answer` with the returned `run_id` (`timeout_seconds` up to 120); `summary` says so explicitly. `get_grokbot_run(run_id)` returns the same record without waiting |
+
+If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missing `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` — check with `bridge_status` first.
+
 ### C. End-to-end test steps
 
 1. **Handshake / empty test** → Grok Bot stays silent (expected)

@@ -62,7 +62,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 
 | 状況 | 応答 |
 |---|---|
-| 正常 | `200 {"ok":true,"run_id":…,"status":"answered"}` |
+| 正常 | `200 {"ok":true,"run_id":…}` |
 | UUID なし | `400 {"error":"run_id_required"}` |
 | token と UUID が不一致 | `400 {"error":"run_id_mismatch"}` |
 | 不明 token / 不明 UUID | `404` |
@@ -93,16 +93,24 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 
 ## 7. 環境変数（Fly secrets）
 
-`CURSOR_WEBHOOK_URL`, `CURSOR_WEBHOOK_API_KEY`（Grok Bot が動く Cursor automation の webhook と `crsr_…` キー）, `MCP_API_KEY`, `INBOUND_WEBHOOK_SECRET`, `ALLOWED_HOSTS`, `DB_PATH=/data/bridge.db`
-任意: `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`
+| 変数 | 出所 | 備考 |
+|---|---|---|
+| `CURSOR_WEBHOOK_URL`, `CURSOR_WEBHOOK_API_KEY` | Grok Bot が動く Cursor automation から控える（webhook URL と `crsr_…` キー） | 必須。Poke には返さない |
+| `MCP_API_KEY` | 運用者が生成（例: `openssl rand -hex 32`） | 必須。同じ値を Poke の API Key 欄に入れる。未設定なら `/mcp` は 503 |
+| `INBOUND_WEBHOOK_SECRET` | 運用者が生成 | 任意。未設定なら `/hooks/grokbot` は 503（`ask_grokbot` には影響なし） |
+| `ALLOWED_HOSTS` | `<app>.fly.dev` | Fly では必須（DNS rebinding 対策と `PUBLIC_BASE_URL` の既定値） |
+| `DB_PATH` | `/data/bridge.db` | Fly では必須（ボリューム `bridge_data`） |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS` | — | 任意 |
 
 ## 8. 運用手順
 
 ```bash
-python3 -m pytest -q                       # テスト（13 件）
+uv run --extra dev pytest -q               # テスト
+flyctl apps create <app>                   # 初回のみ
+flyctl volumes create bridge_data -r <region> -s 1 -a <app> --yes   # 初回のみ（/data にマウント）
+flyctl secrets set -a <app> KEY=value      # シークレットの設定・更新（7 章）
 flyctl deploy --remote-only --ha=false     # デプロイ（app / region は fly.toml）
-flyctl secrets set KEY=value               # シークレット更新
-flyctl logs                                # run created / callback resolved / trigger returning のログ
+flyctl logs -a <app>                       # run created / callback resolved / trigger returning のログ
 ```
 
 Poke 側の設定: MCP URL に `/mcp`、API Key 欄に `MCP_API_KEY` の値（"Bearer" は付けない）。ツール名変更後は Poke が自動で再取得する。
