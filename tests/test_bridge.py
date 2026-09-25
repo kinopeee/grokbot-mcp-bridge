@@ -270,6 +270,28 @@ def test_tokenless_callback_route_removed(client, monkeypatch):
     assert json.loads(asyncio.run(main.get_grokbot_run(result["run_id"])))["status"] == "answered"
 
 
+def test_request_id_only_callback_resolves_via_token_route(client, monkeypatch):
+    async def fake_post(_self, url, **kwargs):
+        return httpx.Response(
+            200,
+            json={"success": True},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
+    result = json.loads(asyncio.run(
+        main.ask_grokbot({"prompt": "R"}, wait_seconds=0)
+    ))
+    response = client.post(urlparse(result["callback_url"]).path, json={
+        "request_id": result["run_id"], "ok": True, "answer": "R",
+    })
+    assert response.status_code == 200
+    assert response.json()["run_id"] == result["run_id"]
+    run = json.loads(asyncio.run(main.get_grokbot_run(result["run_id"])))
+    assert run["status"] == "answered"
+    assert run["answer"]["answer"] == "R"
+
+
 def test_concurrent_grokbot_callbacks_are_correlated(client, monkeypatch):
     async def fake_post(_self, url, **kwargs):
         return httpx.Response(
