@@ -19,9 +19,10 @@ import secrets
 import socket
 import sqlite3
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 import uuid
 
 from fastapi import FastAPI, Request
@@ -67,8 +68,12 @@ CALLBACK_ALLOWED_HOSTS = [
 ]
 MAX_EVENTS = 1000
 MAX_CALLBACK_BODY = 256 * 1024
+INBOUND_TIMESTAMP_TOLERANCE = int(
+    os.environ.get("INBOUND_TIMESTAMP_TOLERANCE_SECONDS", "300")
+)
 logger = logging.getLogger("grokbot-bridge")
 _answer_waiters: dict[str, asyncio.Event] = {}
+_schema_ready: set[str] = set()
 
 _PROTECTED_PREFIXES = ("/mcp", "/sse", "/messages")
 
@@ -76,6 +81,13 @@ _PROTECTED_PREFIXES = ("/mcp", "/sse", "/messages")
 def _db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
+    if DB_PATH not in _schema_ready:
+        _ensure_schema(conn)
+        _schema_ready.add(DB_PATH)
+    return conn
+
+
+def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,7 +119,6 @@ def _db() -> sqlite3.Connection:
     if "run_id" not in columns:
         conn.execute("ALTER TABLE runs ADD COLUMN run_id TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_run_id ON runs(run_id)")
-    return conn
 
 
 def _store_event(delivery_id: str | None, event_type: str | None, signature_ok: bool,
@@ -136,14 +147,26 @@ def _store_event(delivery_id: str | None, event_type: str | None, signature_ok: 
         conn.close()
 
 
-def _verify_signature(raw_body: bytes, signature_header: str | None) -> bool:
+def _verify_signature(raw_body: bytes, signature_header: str | None,
+                      timestamp_header: str | None) -> bool:
     if not INBOUND_WEBHOOK_SECRET or not signature_header:
         return False
     provided = signature_header.strip()
     if provided.startswith("sha256="):
         provided = provided[len("sha256="):]
-    expected = hmac.new(INBOUND_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, provided)
+    signed_payload = raw_body
+    if timestamp_header is not None:
+        try:
+            timestamp = int(timestamp_header.strip())
+        except ValueError:
+            return False
+        if abs(time.time() - timestamp) > INBOUND_TIMESTAMP_TOLERANCE:
+            return False
+        signed_payload = f"{timestamp}.".encode() + raw_body
+    expected = hmac.new(
+        INBOUND_WEBHOOK_SECRET.encode(), signed_payload, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected.encode("utf-8"), provided.encode("utf-8"))
 
 
 def _json_value(value: str | None) -> Any:
@@ -223,34 +246,71 @@ def _run_answer(run_id: str) -> tuple[str, Any] | None:
     return row[0], _json_value(row[1])
 
 
+def _insert_run(token: str, correlation: str, created_at: str,
+                body: dict[str, Any]) -> None:
+    conn = _db()
+    try:
+        conn.execute(
+            "INSERT INTO runs (token, run_id, created_at, payload_json, status)"
+            " VALUES (?,?,?,?,?)",
+            (token, correlation, created_at, json.dumps(body), "pending"),
+        )
+        conn.execute(
+            "DELETE FROM runs WHERE id NOT IN (SELECT id FROM runs ORDER BY id DESC LIMIT ?)",
+            (MAX_EVENTS,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _update_run_upstream(correlation: str, status_code: int, response_text: str,
+                         run_uuid: str | None) -> None:
+    conn = _db()
+    try:
+        conn.execute(
+            "UPDATE runs SET upstream_status = ?, upstream_response = ?, run_uuid = ?"
+            " WHERE run_id = ?",
+            (status_code, response_text, run_uuid, correlation),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _host_matches(hostname: str, allowed_host: str) -> bool:
     return hostname == allowed_host or hostname.endswith(f".{allowed_host}")
 
 
 def _is_safe_callback_url(url: str) -> tuple[bool, str]:
+    safe, reason, _addresses = _inspect_callback_url(url)
+    return safe, reason
+
+
+def _inspect_callback_url(url: str) -> tuple[bool, str, list[str]]:
     try:
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower().rstrip(".")
         if parsed.scheme not in (("https", "http") if CALLBACK_ALLOW_HTTP else ("https",)):
-            return False, "scheme_not_allowed"
+            return False, "scheme_not_allowed", []
         if not hostname:
-            return False, "hostname_required"
+            return False, "hostname_required", []
         if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
-            return False, "userinfo_not_allowed"
+            return False, "userinfo_not_allowed", []
         try:
             port = parsed.port
         except ValueError:
-            return False, "invalid_port"
+            return False, "invalid_port", []
         if not CALLBACK_ALLOW_HTTP and port not in (None, 80, 443):
-            return False, "port_not_allowed"
+            return False, "port_not_allowed", []
         if CALLBACK_ALLOWED_HOSTS and not any(
             _host_matches(hostname, allowed) for allowed in CALLBACK_ALLOWED_HOSTS
         ):
-            return False, "host_not_allowed"
+            return False, "host_not_allowed", []
         if any(_host_matches(hostname, own.lower().rstrip(".")) for own in ALLOWED_HOSTS):
-            return False, "own_host_not_allowed"
+            return False, "own_host_not_allowed", []
         if hostname == "localhost" or hostname.endswith(".internal") or hostname.endswith(".local"):
-            return False, "local_hostname_not_allowed"
+            return False, "local_hostname_not_allowed", []
 
         literal_address = None
         try:
@@ -273,10 +333,10 @@ def _is_safe_callback_url(url: str) -> tuple[bool, str]:
                     or checked.is_reserved
                     or checked.is_unspecified
                 ):
-                    return False, "private_address_not_allowed"
-        return True, "ok"
+                    return False, "private_address_not_allowed", []
+        return True, "ok", [str(address) for address in addresses]
     except (OSError, ValueError):
-        return False, "dns_resolution_failed"
+        return False, "dns_resolution_failed", []
 
 
 if HAS_MCP:
@@ -307,14 +367,18 @@ else:
         return deco
 
 
+def _count_events() -> int:
+    conn = _db()
+    try:
+        return conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    finally:
+        conn.close()
+
+
 @_tool(structured_output=False)
 async def bridge_status() -> str:
     """Report which credentials are configured on the bridge (booleans only, never values)."""
-    conn = _db()
-    try:
-        count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    finally:
-        conn.close()
+    count = await asyncio.to_thread(_count_events)
     return json.dumps({
         "webhook_url_configured": bool(CURSOR_WEBHOOK_URL),
         "webhook_api_key_configured": bool(CURSOR_WEBHOOK_API_KEY),
@@ -343,20 +407,7 @@ async def ask_grokbot(payload: dict[str, Any], wait_seconds: int = 45) -> str:
     body["run_id"] = correlation
     body["request_id"] = correlation
     created_at = datetime.now(timezone.utc).isoformat()
-    conn = _db()
-    try:
-        conn.execute(
-            "INSERT INTO runs (token, run_id, created_at, payload_json, status)"
-            " VALUES (?,?,?,?,?)",
-            (token, correlation, created_at, json.dumps(body), "pending"),
-        )
-        conn.execute(
-            "DELETE FROM runs WHERE id NOT IN (SELECT id FROM runs ORDER BY id DESC LIMIT ?)",
-            (MAX_EVENTS,),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    await asyncio.to_thread(_insert_run, token, correlation, created_at, body)
 
     result: dict[str, Any] = {
         "ok": False,
@@ -396,16 +447,9 @@ async def ask_grokbot(payload: dict[str, Any], wait_seconds: int = 45) -> str:
                 run_uuid = upstream_json.get("runUuid")
         except (ValueError, TypeError):
             pass
-        conn = _db()
-        try:
-            conn.execute(
-                "UPDATE runs SET upstream_status = ?, upstream_response = ?, run_uuid = ?"
-                " WHERE run_id = ?",
-                (resp.status_code, body, run_uuid, correlation),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        await asyncio.to_thread(
+            _update_run_upstream, correlation, resp.status_code, body, run_uuid
+        )
         result.update({"ok": resp.is_success, "status_code": resp.status_code, "response": body})
     except httpx.HTTPError as exc:
         result.update({"error": "upstream_request_failed", "detail": str(exc)[:500]})
@@ -418,7 +462,7 @@ async def ask_grokbot(payload: dict[str, Any], wait_seconds: int = 45) -> str:
         started = asyncio.get_running_loop().time()
         try:
             while True:
-                answer = _run_answer(correlation)
+                answer = await asyncio.to_thread(_run_answer, correlation)
                 if answer and answer[0] == "answered":
                     answer_text = _extract_answer_text(answer[1])
                     result.update({
@@ -464,7 +508,7 @@ async def wait_for_grokbot_answer(run_id: str, timeout_seconds: int = 60) -> str
     """Wait for a Grok Bot callback by UUID and return raw answer plus answer_text."""
     timeout = max(1, min(int(timeout_seconds), 120))
     for _ in range(timeout):
-        answer = _run_answer(run_id)
+        answer = await asyncio.to_thread(_run_answer, run_id)
         if answer and answer[0] == "answered":
             return json.dumps({
                 "run_id": run_id,
@@ -473,7 +517,7 @@ async def wait_for_grokbot_answer(run_id: str, timeout_seconds: int = 60) -> str
                 "answer_text": _extract_answer_text(answer[1]),
             })
         await asyncio.sleep(1)
-    answer = _run_answer(run_id)
+    answer = await asyncio.to_thread(_run_answer, run_id)
     if not answer:
         return json.dumps({"error": "not_found", "run_id": run_id})
     return json.dumps({
@@ -619,7 +663,7 @@ async def require_mcp_auth(request: Request, call_next):
         if auth.lower().startswith("bearer "):
             auth = auth[7:].strip()
         presented = auth or request.headers.get("x-api-key", "").strip()
-        if not hmac.compare_digest(presented, MCP_API_KEY):
+        if not hmac.compare_digest(presented.encode("utf-8"), MCP_API_KEY.encode("utf-8")):
             return JSONResponse({"error": "unauthorized"}, status_code=401,
                                 headers={"WWW-Authenticate": "Bearer"})
     return await call_next(request)
@@ -640,16 +684,23 @@ async def root():
     }
 
 
-async def _read_callback_body(request: Request) -> dict[str, Any] | JSONResponse:
+async def _read_limited_body(request: Request) -> bytes | JSONResponse:
     content_length = request.headers.get("content-length")
     try:
         if content_length is not None and int(content_length) > MAX_CALLBACK_BODY:
-            return JSONResponse({"error": "callback_body_too_large"}, status_code=413)
+            return JSONResponse({"error": "body_too_large"}, status_code=413)
     except ValueError:
         return JSONResponse({"error": "invalid_content_length"}, status_code=400)
     raw_body = await request.body()
     if len(raw_body) > MAX_CALLBACK_BODY:
-        return JSONResponse({"error": "callback_body_too_large"}, status_code=413)
+        return JSONResponse({"error": "body_too_large"}, status_code=413)
+    return raw_body
+
+
+async def _read_callback_body(request: Request) -> dict[str, Any] | JSONResponse:
+    raw_body = await _read_limited_body(request)
+    if isinstance(raw_body, JSONResponse):
+        return raw_body
     try:
         body = json.loads(raw_body)
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -676,7 +727,9 @@ def _resolve_callback(body: dict[str, Any], token: str | None) -> JSONResponse |
         if not row:
             error = "unknown_callback" if token is not None else "unknown_run"
             return JSONResponse({"error": error}, status_code=404)
-        if not hmac.compare_digest(str(row[1] or ""), echo):
+        if not hmac.compare_digest(
+            str(row[1] or "").encode("utf-8"), echo.encode("utf-8")
+        ):
             return JSONResponse({"error": "run_id_mismatch"}, status_code=400)
         if row[3] == "answered":
             return JSONResponse({"error": "already_answered"}, status_code=409)
@@ -706,10 +759,15 @@ def _resolve_callback(body: dict[str, Any], token: str | None) -> JSONResponse |
             return JSONResponse({"error": "callback_expired"}, status_code=410)
     finally:
         conn.close()
-    if waiter := _answer_waiters.get(row[1]):
-        waiter.set()
-    logger.info("callback resolved run_id=%s status=answered", row[1])
     return {"ok": True, "run_id": row[1]}
+
+
+def _finish_callback_result(result: JSONResponse | dict[str, Any]):
+    if isinstance(result, dict):
+        if waiter := _answer_waiters.get(result["run_id"]):
+            waiter.set()
+        logger.info("callback resolved run_id=%s status=answered", result["run_id"])
+    return result
 
 
 @app.post("/callbacks")
@@ -718,7 +776,8 @@ async def grokbot_callback_without_token(request: Request):
     body = await _read_callback_body(request)
     if isinstance(body, JSONResponse):
         return body
-    return _resolve_callback(body, None)
+    result = await asyncio.to_thread(_resolve_callback, body, None)
+    return _finish_callback_result(result)
 
 
 @app.post("/callbacks/{token}")
@@ -727,7 +786,8 @@ async def grokbot_callback(token: str, request: Request):
     body = await _read_callback_body(request)
     if isinstance(body, JSONResponse):
         return body
-    return _resolve_callback(body, token)
+    result = await asyncio.to_thread(_resolve_callback, body, token)
+    return _finish_callback_result(result)
 
 
 @app.post("/hooks/grokbot")
@@ -735,18 +795,22 @@ async def inbound_grokbot_webhook(request: Request):
     """Receive Grok Bot events through the Cursor automation webhook."""
     if not INBOUND_WEBHOOK_SECRET:
         return JSONResponse({"error": "inbound_webhook_not_configured"}, status_code=503)
-    raw_body = await request.body()
+    raw_body = await _read_limited_body(request)
+    if isinstance(raw_body, JSONResponse):
+        return raw_body
     signature = request.headers.get("x-webhook-signature")
+    timestamp = request.headers.get("x-webhook-timestamp")
     bearer = request.headers.get("authorization", "")
-    signature_ok = _verify_signature(raw_body, signature) or hmac.compare_digest(
-        bearer, f"Bearer {INBOUND_WEBHOOK_SECRET}")
+    signature_ok = _verify_signature(raw_body, signature, timestamp) or hmac.compare_digest(
+        bearer.encode("utf-8"), f"Bearer {INBOUND_WEBHOOK_SECRET}".encode("utf-8"))
     if not signature_ok:
         return JSONResponse({"error": "invalid_signature"}, status_code=401)
     safe_headers = {
         k: v for k, v in request.headers.items()
         if k.lower() in ("x-webhook-id", "x-webhook-event", "user-agent", "content-type")
     }
-    event_id = _store_event(
+    event_id = await asyncio.to_thread(
+        _store_event,
         delivery_id=request.headers.get("x-webhook-id"),
         event_type=request.headers.get("x-webhook-event"),
         signature_ok=True,
@@ -774,7 +838,9 @@ async def inbound_grokbot_webhook(request: Request):
             "callback": "none",
             "note": "コールバックURLなし",
         })
-    safe, reason = _is_safe_callback_url(callback_url)
+    safe, reason, addresses = await asyncio.to_thread(
+        _inspect_callback_url, callback_url
+    )
     if not safe:
         return JSONResponse({
             "ok": True,
@@ -783,17 +849,41 @@ async def inbound_grokbot_webhook(request: Request):
             "callback_status": None,
             "callback_error": reason,
         })
+    parsed_callback = urlparse(callback_url)
+    callback_hostname = parsed_callback.hostname or ""
+    pinned_address = addresses[0]
+    pinned_netloc = (
+        f"[{pinned_address}]" if ":" in pinned_address else pinned_address
+    )
+    if parsed_callback.port is not None:
+        pinned_netloc += f":{parsed_callback.port}"
+    pinned_url = urlunparse((
+        parsed_callback.scheme,
+        pinned_netloc,
+        parsed_callback.path or "/",
+        parsed_callback.params,
+        parsed_callback.query,
+        "",
+    ))
+    default_port = 443 if parsed_callback.scheme == "https" else 80
+    host_header = callback_hostname
+    if parsed_callback.port not in (None, default_port):
+        host_header += f":{parsed_callback.port}"
     callback_status = None
     callback_error = None
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             response = await client.post(
-                callback_url,
+                pinned_url,
                 json={"ok": True, "answer": f"受信しました (event_id={event_id})"},
                 headers={
                     "Content-Type": "application/json",
                     "User-Agent": "grokbot-mcp-bridge",
+                    "Host": host_header,
                 },
+                extensions={"sni_hostname": callback_hostname}
+                if parsed_callback.scheme == "https"
+                else None,
             )
         callback_status = response.status_code
         if not response.is_success:
