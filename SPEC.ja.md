@@ -11,7 +11,7 @@ Poke ──(MCP / Bearer)──▶ ブリッジ ──(POST, Bearer crsr_…)─
 Poke ◀──(MCP 応答)────── ブリッジ ◀──(POST callback_url)──── Grok Bot
 ```
 
-- MCP エンドポイント: `https://cursor-mcp-bridge-kinopee.fly.dev/mcp`（Streamable HTTP）/ `/sse`（SSE）
+- MCP エンドポイント: `https://<app>.fly.dev/mcp`（Streamable HTTP）/ `/sse`（SSE）。`<app>` は `fly.toml` の `app`（既定 `grokbot-mcp-bridge`）
 - 認証: `Authorization: Bearer <MCP_API_KEY>`（`Authorization: <key>` / `X-API-Key: <key>` も可）
 - Grok Bot 側の webhook URL / API キーはブリッジのサーバー側シークレット（Fly secrets）にのみ保持され、Poke には一切返さない。
 
@@ -37,7 +37,7 @@ Poke ◀──(MCP 応答)────── ブリッジ ◀──(POST callbac
   "message": "<Poke からの内容。payload はそのまま透過>",
   "run_id":      "8b1c…-uuid4",
   "request_id":  "8b1c…-uuid4",
-  "callback_url": "https://cursor-mcp-bridge-kinopee.fly.dev/callbacks/<token>",
+  "callback_url": "https://<app>.fly.dev/callbacks/<token>",
   "reply_url":    "…同じ URL…",
   "response_url": "…同じ URL…"
 }
@@ -100,7 +100,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 
 ```bash
 python3 -m pytest -q                       # テスト（13 件）
-flyctl deploy --remote-only --ha=false     # デプロイ（app: cursor-mcp-bridge-kinopee, region nrt）
+flyctl deploy --remote-only --ha=false     # デプロイ（app / region は fly.toml）
 flyctl secrets set KEY=value               # シークレット更新
 flyctl logs                                # run created / callback resolved / trigger returning のログ
 ```

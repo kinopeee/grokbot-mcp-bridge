@@ -1,4 +1,4 @@
-app = "cursor-mcp-bridge-kinopee"
+app = "grokbot-mcp-bridge"
 primary_region = "nrt"
 
 [env]

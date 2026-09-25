@@ -11,7 +11,7 @@ Poke ──(MCP / Bearer)──▶ Bridge ──(POST, Bearer crsr_…)──▶
 Poke ◀──(MCP response)── Bridge ◀──(POST callback_url)──── Grok Bot
 ```
 
-- MCP endpoints: `https://cursor-mcp-bridge-kinopee.fly.dev/mcp` (Streamable HTTP) / `/sse` (SSE)
+- MCP endpoints: `https://<app>.fly.dev/mcp` (Streamable HTTP) / `/sse` (SSE). `<app>` is `app` in `fly.toml` (defaults to `grokbot-mcp-bridge`)
 - Authentication: `Authorization: Bearer <MCP_API_KEY>` (`Authorization: <key>` and `X-API-Key: <key>` are also accepted)
 - The Grok Bot webhook URL and API key are held only as server-side secrets on the bridge (Fly secrets) and are never returned to Poke.
 
@@ -37,7 +37,7 @@ JSON that `ask_grokbot` POSTs to the Grok Bot webhook:
   "message": "<content from Poke; the payload is passed through as-is>",
   "run_id":      "8b1c…-uuid4",
   "request_id":  "8b1c…-uuid4",
-  "callback_url": "https://cursor-mcp-bridge-kinopee.fly.dev/callbacks/<token>",
+  "callback_url": "https://<app>.fly.dev/callbacks/<token>",
   "reply_url":    "…same URL…",
   "response_url": "…same URL…"
 }
@@ -100,7 +100,7 @@ Optional: `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CAL
 
 ```bash
 python3 -m pytest -q                       # tests (13)
-flyctl deploy --remote-only --ha=false     # deploy (app: cursor-mcp-bridge-kinopee, region nrt)
+flyctl deploy --remote-only --ha=false     # deploy (app / region come from fly.toml)
 flyctl secrets set KEY=value               # update secrets
 flyctl logs                                # logs for run created / callback resolved / trigger returning
 ```

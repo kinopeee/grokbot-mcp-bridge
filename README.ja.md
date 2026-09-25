@@ -11,7 +11,7 @@ Poke は webhook の URL や API キーを受け取らずにブリッジを呼�
 |---|---|---|
 | 概要（このファイル） | [README.md](README.md) | [README.ja.md](README.ja.md) |
 | ブリッジの仕様と運用 | [SPEC.md](SPEC.md) | [SPEC.ja.md](SPEC.ja.md) |
-| Poke から Eric（Grok Bot）を呼び出す | [poke-invocation.md](poke-invocation.md) | [poke-invocation.ja.md](poke-invocation.ja.md) |
+| Poke から Grok Bot を呼び出す | [poke-invocation.md](poke-invocation.md) | [poke-invocation.ja.md](poke-invocation.ja.md) |
 
 ## エンドポイント
 

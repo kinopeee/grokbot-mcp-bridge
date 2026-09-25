@@ -11,7 +11,7 @@ Poke can call the bridge without receiving the webhook URL or API key.
 |---|---|---|
 | Overview (this file) | [README.md](README.md) | [README.ja.md](README.ja.md) |
 | Bridge specification and operations | [SPEC.md](SPEC.md) | [SPEC.ja.md](SPEC.ja.md) |
-| Calling Eric (Grok Bot) from Poke | [poke-invocation.md](poke-invocation.md) | [poke-invocation.ja.md](poke-invocation.ja.md) |
+| Calling Grok Bot from Poke | [poke-invocation.md](poke-invocation.md) | [poke-invocation.ja.md](poke-invocation.ja.md) |
 
 ## Endpoints
 
