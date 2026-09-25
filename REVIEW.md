@@ -11,8 +11,8 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
 - **受信 webhook 認証** `inbound_grokbot_webhook` / `_verify_signature`
   - 受け付けるのは `X-Webhook-Signature: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` と `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>` の 2 方式。ヘッダー名を変える変更は `SPEC.md` / `SPEC.ja.md` §6 と `tests/test_bridge.py` を同時に更新していなければ指摘する。
   - 署名は**生のリクエストボディ**に対して計算する。パース後の JSON を再シリアライズして検証する変更は不可。
-- **コールバック解決** `_resolve_callback` / `/callbacks/{token}` / `/callbacks`
-  - `token` と本文の `run_id`（または `request_id`）の両方で照合し、不一致は 400。トークンなし `/callbacks` は `run_id` のみで解決するので、こちらの緩和には特に注意。
+- **コールバック解決** `_resolve_callback` / `/callbacks/{token}`
+  - `token` と本文の `run_id`（または `request_id`）の両方で照合し、不一致は 400。
   - `already_answered`（409）/ `callback_expired`（410, `CALLBACK_TTL_SECONDS`）の判定と、`UPDATE ... WHERE status = 'pending'` による二重回答防止を弱めていないか。
   - `_read_callback_body` の `MAX_CALLBACK_BODY`（256 KiB）チェックは Content-Length と実ボディの両方で行う。
 - **SSRF ガード** `_is_safe_callback_url` / `_host_matches`

@@ -66,7 +66,7 @@ For the Grok Bot-side contract (echoing `run_id`, posting to `callback_url`) and
 - `POST /mcp` (authenticated MCP)
 - `GET /sse` and `POST /messages/` (authenticated MCP)
 - `POST /hooks/grokbot` (signed inbound Grok Bot events)
-- `POST /callbacks` and `POST /callbacks/{token}` (Grok Bot answers)
+- `POST /callbacks/{token}` (Grok Bot answers)
 
 ## MCP tools
 

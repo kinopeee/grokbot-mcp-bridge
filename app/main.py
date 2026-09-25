@@ -710,23 +710,17 @@ async def _read_callback_body(request: Request) -> dict[str, Any] | JSONResponse
     return body
 
 
-def _resolve_callback(body: dict[str, Any], token: str | None) -> JSONResponse | dict[str, Any]:
+def _resolve_callback(body: dict[str, Any], token: str) -> JSONResponse | dict[str, Any]:
     echo = body.get("run_id") or body.get("request_id")
     if not isinstance(echo, str) or not echo:
         return JSONResponse({"error": "run_id_required"}, status_code=400)
     conn = _db()
     try:
-        if token is not None:
-            row = conn.execute(
-                "SELECT id, run_id, created_at, status FROM runs WHERE token = ?", (token,)
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT id, run_id, created_at, status FROM runs WHERE run_id = ?", (echo,)
-            ).fetchone()
+        row = conn.execute(
+            "SELECT id, run_id, created_at, status FROM runs WHERE token = ?", (token,)
+        ).fetchone()
         if not row:
-            error = "unknown_callback" if token is not None else "unknown_run"
-            return JSONResponse({"error": error}, status_code=404)
+            return JSONResponse({"error": "unknown_callback"}, status_code=404)
         if not hmac.compare_digest(
             str(row[1] or "").encode("utf-8"), echo.encode("utf-8")
         ):
@@ -768,16 +762,6 @@ def _finish_callback_result(result: JSONResponse | dict[str, Any]):
             waiter.set()
         logger.info("callback resolved run_id=%s status=answered", result["run_id"])
     return result
-
-
-@app.post("/callbacks")
-async def grokbot_callback_without_token(request: Request):
-    """Capture an answer posted with only its correlation UUID."""
-    body = await _read_callback_body(request)
-    if isinstance(body, JSONResponse):
-        return body
-    result = await asyncio.to_thread(_resolve_callback, body, None)
-    return _finish_callback_result(result)
 
 
 @app.post("/callbacks/{token}")

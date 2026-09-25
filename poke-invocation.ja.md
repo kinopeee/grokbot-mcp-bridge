@@ -54,7 +54,6 @@ Poke が「同じ HTTP レスポンスに答えが来る」前提だと、この
 | `POST/GET /mcp` | MCP Streamable HTTP（要 Bearer） |
 | `/sse` | MCP SSE |
 | `POST /hooks/grokbot` | ブリッジの inbound Grok Bot webhook |
-| `POST /callbacks` | 相関 UUID だけで答えを受け取る |
 | `POST /callbacks/{token}` | トークン付きコールバック |
 
 ---

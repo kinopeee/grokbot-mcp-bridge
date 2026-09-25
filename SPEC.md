@@ -56,7 +56,7 @@ When the answer is ready, Grok Bot POSTs to the `callback_url` it received:
 ```
 
 - **Echoing the UUID is required**: include the received UUID in either `run_id` or `request_id`.
-- Send to `POST /callbacks/<token>` (recommended; matched on both token and UUID) or `POST /callbacks` (matched on UUID only).
+- Send to `POST /callbacks/<token>` (matched on both token and UUID).
 - The answer is extracted from the first present field in the order `answer → message → content → text → output → result` and normalized into `answer_text` (if `content` is an array of `{"type":"text","text":…}`, the texts are joined with newlines).
 - The body must be a JSON object, at most 256 KB.
 
