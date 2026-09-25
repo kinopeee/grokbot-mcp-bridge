@@ -180,6 +180,21 @@ Content-Type: application/json
 3. `callback_url` / `reply_url` / `response_url` は、呼び出し側が指定しなければブリッジが自動付与する（トークン付き `/callbacks/{token}`）
 4. コールバック受信後、その UUID の待ちを解決し、MCP `tools/call` 結果として Poke に本文を返す（`wait_seconds` 内に届かなければ `pending` を返すので、`wait_for_grokbot_answer` で回収する）
 
+Poke が実際に送るもの（`tools/call`）:
+
+```json
+{"name": "ask_grokbot", "arguments": {"payload": {"message": "短く自己紹介してください。"}, "wait_seconds": 60}}
+```
+
+`payload` は（`run_id` / `request_id` / コールバック URL を足したうえで）そのまま Grok Bot webhook に転送されるので、依頼文は `message` に入れる。`wait_seconds` は 0〜120 に丸められる。結果は JSON 文字列:
+
+| `answer_status` | Poke がすること |
+|---|---|
+| `answered` | `answer_text` を表示する |
+| `pending` | 返ってきた `run_id` で `wait_for_grokbot_answer` を呼ぶ（`timeout_seconds` は最大 120）。`summary` にもその旨が書かれる。`get_grokbot_run(run_id)` なら待たずに同じレコードを取れる |
+
+`ask_grokbot` が `"error": "bridge_not_configured"` を返す場合はブリッジに `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` が無い。まず `bridge_status` で確認する。
+
 ### C. 疎通テストの進め方
 
 1. **握手・空テスト** → Grok Bot は沈黙（正常）
