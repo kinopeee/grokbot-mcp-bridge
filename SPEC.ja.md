@@ -101,7 +101,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 | `MCP_API_KEY` | 運用者が生成（例: `openssl rand -hex 32`） | 必須。同じ値を Poke の API Key 欄に入れる。未設定なら `/mcp` は 503 |
 | `INBOUND_WEBHOOK_SECRET` | 運用者が生成 | 任意。未設定なら `/hooks/grokbot` は 503（`ask_grokbot` には影響なし） |
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Fly では必須（DNS rebinding 対策と `PUBLIC_BASE_URL` の既定値） |
-| `DB_PATH` | `/data/bridge.db` | Fly では必須（ボリューム `bridge_data`） |
+| `DB_PATH` | `/data/bridge.db` | イメージでは `/data/bridge.db` が既定（Dockerfile `ENV`）で上書き可能。Fly ではボリューム `bridge_data` を指す |
 | `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意 |
 
 ## 8. 運用手順
