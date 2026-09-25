@@ -1,0 +1,108 @@
+# Grok Bot Invocation Spec and Procedures (grokbot-mcp-bridge)
+
+English | [日本語](SPEC.ja.md)
+
+Communication spec for Poke ⇄ bridge ⇄ Grok Bot (running on a Cursor automation webhook).
+
+## 1. Overview
+
+```
+Poke ──(MCP / Bearer)──▶ Bridge ──(POST, Bearer crsr_…)──▶ Grok Bot (Cursor automation webhook)
+Poke ◀──(MCP response)── Bridge ◀──(POST callback_url)──── Grok Bot
+```
+
+- MCP endpoints: `https://cursor-mcp-bridge-kinopee.fly.dev/mcp` (Streamable HTTP) / `/sse` (SSE)
+- Authentication: `Authorization: Bearer <MCP_API_KEY>` (`Authorization: <key>` and `X-API-Key: <key>` are also accepted)
+- The Grok Bot webhook URL and API key are held only as server-side secrets on the bridge (Fly secrets) and are never returned to Poke.
+
+## 2. MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `bridge_status` | Check configuration status (reports only whether secrets are set, never their values) |
+| `ask_grokbot(payload, wait_seconds=45)` | Send a request to Grok Bot. Waits for the callback for 45 seconds by default (max 120) and returns `answer_text`. `wait_seconds=0` returns immediately |
+| `get_grokbot_run(run_id)` | Fetch a run by UUID (raw `answer` plus `answer_text`) |
+| `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | Wait for the callback of an unanswered run (max 120 seconds) |
+| `list_grokbot_runs(limit)` | List recent runs |
+| `list_grokbot_events(limit)` / `get_grokbot_event(event_id)` | List inbound webhook events / fetch one in full |
+
+Resources: `grokbot://runs`, `grokbot://events`
+
+## 3. Outbound request (bridge → Grok Bot)
+
+JSON that `ask_grokbot` POSTs to the Grok Bot webhook:
+
+```json
+{
+  "message": "<content from Poke; the payload is passed through as-is>",
+  "run_id":      "8b1c…-uuid4",
+  "request_id":  "8b1c…-uuid4",
+  "callback_url": "https://cursor-mcp-bridge-kinopee.fly.dev/callbacks/<token>",
+  "reply_url":    "…same URL…",
+  "response_url": "…same URL…"
+}
+```
+
+- The bridge always sets `run_id` and `request_id` to **the same UUID4** (overwriting any caller-supplied value).
+- `callback_url` / `reply_url` / `response_url` are added automatically unless the caller provides them.
+- Header: `Authorization: Bearer <CURSOR_WEBHOOK_API_KEY>` (added automatically; no Poke-side configuration needed).
+
+## 4. Callback (Grok Bot → bridge)
+
+When the answer is ready, Grok Bot POSTs to the `callback_url` it received:
+
+```json
+{"ok": true, "answer": "answer text", "run_id": "<the received run_id, echoed as-is>"}
+```
+
+- **Echoing the UUID is required**: include the received UUID in either `run_id` or `request_id`.
+- Send to `POST /callbacks/<token>` (recommended; matched on both token and UUID) or `POST /callbacks` (matched on UUID only).
+- The answer is extracted from the first present field in the order `answer → message → content → text → output → result` and normalized into `answer_text` (if `content` is an array of `{"type":"text","text":…}`, the texts are joined with newlines).
+- The body must be a JSON object, at most 256 KB.
+
+| Situation | Response |
+|---|---|
+| Success | `200 {"ok":true,"run_id":…,"status":"answered"}` |
+| No UUID | `400 {"error":"run_id_required"}` |
+| Token and UUID do not match | `400 {"error":"run_id_mismatch"}` |
+| Unknown token / unknown UUID | `404` |
+| Already answered (duplicate) | `409` |
+| Expired (default 3600 seconds) | `410` |
+
+## 5. Example response as seen by Poke
+
+```json
+{
+  "ok": true,
+  "run_id": "06eec502-cf7b-468d-8307-8dcf945e1f17",
+  "answer_status": "answered",
+  "answer_text": "…answer text…",
+  "summary": "Grok Bot answered: …"
+}
+```
+
+If no answer arrives within 45 seconds, the bridge returns `answer_status: "pending"` with
+`"summary": "No answer yet from Grok Bot; call wait_for_grokbot_answer with run_id …"`, and Poke should then call `wait_for_grokbot_answer`.
+
+## 6. Inbound webhook (Grok Bot → bridge, push delivery)
+
+`POST /hooks/grokbot`
+- Authentication: `X-Signature-256: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` or `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
+- If the body contains `callback_url` (or `reply_url` / `response_url`), the bridge POSTs `{"ok":true,"answer":"受信しました (event_id=N)"}` ("received") to it, but only to public https URLs (SSRF guard: private, loopback, link-local, the bridge's own host, etc. are rejected).
+- Otherwise it returns `{"ok":true,"event_id":N,"callback":"none","note":"コールバックURLなし"}` ("no callback URL").
+
+## 7. Environment variables (Fly secrets)
+
+`CURSOR_WEBHOOK_URL`, `CURSOR_WEBHOOK_API_KEY` (the webhook and `crsr_…` key of the Cursor automation that runs Grok Bot), `MCP_API_KEY`, `INBOUND_WEBHOOK_SECRET`, `ALLOWED_HOSTS`, `DB_PATH=/data/bridge.db`
+Optional: `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`
+
+## 8. Operations
+
+```bash
+python3 -m pytest -q                       # tests (13)
+flyctl deploy --remote-only --ha=false     # deploy (app: cursor-mcp-bridge-kinopee, region nrt)
+flyctl secrets set KEY=value               # update secrets
+flyctl logs                                # logs for run created / callback resolved / trigger returning
+```
+
+Poke-side setup: use the `/mcp` URL as the MCP URL and put the value of `MCP_API_KEY` in the API Key field (without the "Bearer" prefix). Poke re-fetches tool definitions automatically after tool names change.
