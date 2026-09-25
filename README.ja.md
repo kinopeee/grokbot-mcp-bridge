@@ -66,7 +66,7 @@ Grok Bot 側の契約（`run_id` のエコー、`callback_url` への POST）と
 - `POST /mcp`（認証付き MCP）
 - `GET /sse` と `POST /messages/`（認証付き MCP）
 - `POST /hooks/grokbot`（署名付きの Grok Bot 受信イベント）
-- `POST /callbacks` と `POST /callbacks/{token}`（Grok Bot からの回答）
+- `POST /callbacks/{token}`（Grok Bot からの回答）
 
 ## MCP ツール
 

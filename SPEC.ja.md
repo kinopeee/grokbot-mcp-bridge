@@ -56,7 +56,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 ```
 
 - **UUID のエコーは必須**: `run_id` または `request_id` のどちらかに、受け取った UUID を含める。
-- 送り先は `POST /callbacks/<token>`（推奨。token + UUID の両方で照合）または `POST /callbacks`（UUID のみで照合）。
+- 送り先は `POST /callbacks/<token>`（token + UUID の両方で照合）。
 - 回答フィールドは `answer → message → content → text → output → result` の順で抽出し `answer_text` に正規化（`content` が `{"type":"text","text":…}` 配列なら改行連結）。
 - 本文は JSON オブジェクト、最大 256 KB。
 

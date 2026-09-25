@@ -247,7 +247,7 @@ def test_overlapping_grokbot_runs_require_matching_uuid(client, monkeypatch):
     assert json.loads(asyncio.run(main.get_grokbot_run(result_a["run_id"])))["answer"]["answer"] == "A"
 
 
-def test_tokenless_grokbot_callback_resolution(client, monkeypatch):
+def test_tokenless_callback_route_removed(client, monkeypatch):
     async def fake_post(_self, url, **kwargs):
         return httpx.Response(
             200,
@@ -256,19 +256,18 @@ def test_tokenless_grokbot_callback_resolution(client, monkeypatch):
         )
 
     monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
+    assert client.post(
+        "/callbacks", json={"run_id": str(uuid.uuid4())}
+    ).status_code in (404, 405)
     result = json.loads(asyncio.run(
         main.ask_grokbot({"prompt": "C"}, wait_seconds=0)
     ))
-    response = client.post("/callbacks", json={
-        "request_id": result["run_id"], "ok": True, "answer": "C",
+    response = client.post(urlparse(result["callback_url"]).path, json={
+        "run_id": result["run_id"], "ok": True, "answer": "C",
     })
     assert response.status_code == 200
     assert response.json()["run_id"] == result["run_id"]
     assert json.loads(asyncio.run(main.get_grokbot_run(result["run_id"])))["status"] == "answered"
-    assert client.post("/callbacks", json={"run_id": str(uuid.uuid4())}).status_code == 404
-    assert client.post("/callbacks", json={
-        "run_id": result["run_id"], "ok": True, "answer": "again",
-    }).status_code == 409
 
 
 def test_concurrent_grokbot_callbacks_are_correlated(client, monkeypatch):

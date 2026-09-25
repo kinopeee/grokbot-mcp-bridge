@@ -54,7 +54,6 @@ If Poke assumes "the answer comes back in the same HTTP response", this path can
 | `POST/GET /mcp` | MCP Streamable HTTP (Bearer required) |
 | `/sse` | MCP SSE |
 | `POST /hooks/grokbot` | Bridge's inbound Grok Bot webhook |
-| `POST /callbacks` | Receives answers matched by correlation UUID only |
 | `POST /callbacks/{token}` | Token-scoped callback |
 
 ---
