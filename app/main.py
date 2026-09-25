@@ -856,7 +856,9 @@ async def inbound_grokbot_webhook(request: Request):
     callback_status = None
     callback_error = None
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        async with httpx.AsyncClient(
+            timeout=10.0, follow_redirects=False, trust_env=False
+        ) as client:
             response = await client.post(
                 pinned_url,
                 json={"ok": True, "answer": f"受信しました (event_id={event_id})"},
