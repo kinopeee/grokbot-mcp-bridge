@@ -27,6 +27,7 @@ import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 try:
     from dotenv import load_dotenv
@@ -691,10 +692,15 @@ async def _read_limited_body(request: Request) -> bytes | JSONResponse:
             return JSONResponse({"error": "body_too_large"}, status_code=413)
     except ValueError:
         return JSONResponse({"error": "invalid_content_length"}, status_code=400)
-    raw_body = await request.body()
-    if len(raw_body) > MAX_CALLBACK_BODY:
-        return JSONResponse({"error": "body_too_large"}, status_code=413)
-    return raw_body
+    body = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_CALLBACK_BODY:
+                return JSONResponse({"error": "body_too_large"}, status_code=413)
+            body += chunk
+    except ClientDisconnect:
+        return JSONResponse({"error": "client_disconnected"}, status_code=400)
+    return bytes(body)
 
 
 async def _read_callback_body(request: Request) -> dict[str, Any] | JSONResponse:
