@@ -16,7 +16,7 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
   - `already_answered`（409）/ `callback_expired`（410, `CALLBACK_TTL_SECONDS`）の判定と、`UPDATE ... WHERE status = 'pending'` による二重回答防止を弱めていないか。
   - `_read_limited_body` の `MAX_CALLBACK_BODY`（256 KiB）チェックは Content-Length の事前チェックと、ボディのストリーム読み途中の中断で行う。`request.body()` で全量をメモリにためる実装への回帰は chunked transfer-encoding で DoS になるため不可。
 - **SSRF ガード** `_is_safe_callback_url` / `_host_matches`
-  - 受信 webhook 本文の `callback_url`（`reply_url` / `response_url`）へ POST する前に必ず通す。`CALLBACK_ALLOWED_HOSTS` 未設定は全拒否（フェイルクローズ）、許可リスト外ホスト、https 以外、userinfo 付き、80/443 以外のポート、自ホスト（`ALLOWED_HOSTS`）、`localhost` / `.internal` / `.local`、private / loopback / link-local アドレスは拒否。拒否理由文字列を減らす・順序を変える変更は挙動差分を確認する。
+  - 受信 webhook 本文の `callback_url`（`reply_url` / `response_url`）へ POST する前に必ず通す。`CALLBACK_ALLOWED_HOSTS` 未設定は全拒否（フェイルクローズ）、許可リスト外ホスト、https 以外、userinfo 付き、80/443 以外のポート、自ホスト（`ALLOWED_HOSTS`）、`localhost` / `.internal` / `.local`、private / loopback / link-local および `is_global` でないアドレス（`100.64.0.0/10` 等）は拒否。拒否理由文字列を減らす・順序を変える変更は挙動差分を確認する。
   - `CALLBACK_ALLOW_HTTP=1` はテスト専用の緩和で、http スキームの許可のみ（許可リスト・IP/ポート検査は常に有効）。本番向けコードパスやドキュメントで既定化していないか。
 - **秘密比較** はすべて `hmac.compare_digest` を使う。`==` での比較や、キーの一部をログ・レスポンス・例外メッセージに出す変更は不可。
 
@@ -45,7 +45,7 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
 - SQLite は `DB_PATH`（本番は Fly volume 上の `/data/bridge.db`）に WAL モードで置く。`runs` / `events` のスキーマ変更は既存 DB との互換（`CREATE TABLE IF NOT EXISTS` の追記で済むか、マイグレーションが要るか）を確認する。
 - `_db()` は都度接続・都度 close。接続をグローバルに保持する、`finally` で close しない変更は指摘する。
 - `ask_grokbot` の待機は `_answer_waiters`（`asyncio.Event`）で行う。イベントの登録・解除漏れや、`wait_seconds` / `timeout_seconds` 上限の撤廃はリクエストの張り付きにつながる。
-- ログには `run_id` / `status` などの相関情報のみ。`payload` 全文や回答本文、ヘッダー値をログに出す変更は指摘する。
+- ログには `run_id` / `status` などの相関情報のみ。`payload` 全文や回答本文、ヘッダー値をログに出す変更は指摘する。`httpx` / `httpcore` ロガーは WARNING 以上に抑え（INFO だと `CURSOR_WEBHOOK_URL` 全体が出る）、`uvicorn.access` には `/callbacks/<token>` をマスクするフィルタを付ける。これらを外す変更は指摘する。
 
 ## デプロイ
 
