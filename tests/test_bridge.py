@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import http.server
 import json
+import logging
 import os
 import socket
 import tempfile
@@ -111,7 +113,8 @@ def test_inbound_delivers_callback(client, monkeypatch):
             return real_getaddrinfo(host, *args, **kwargs)
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
-    async def forward_post(_self, url, **kwargs):
+    @contextlib.asynccontextmanager
+    async def fake_stream(_self, method, url, **kwargs):
         # The handler must dial the DNS-pinned address with the original Host header.
         assert urlparse(url).hostname == "93.184.216.34"
         assert kwargs["headers"]["Host"] == "example.com"
@@ -122,10 +125,10 @@ def test_inbound_delivers_callback(client, monkeypatch):
             method="POST",
         )
         urllib.request.urlopen(request)
-        return httpx.Response(200, request=httpx.Request("POST", url))
+        yield httpx.Response(200, request=httpx.Request(method, url))
 
     monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
-    monkeypatch.setattr(main.httpx.AsyncClient, "post", forward_post)
+    monkeypatch.setattr(main.httpx.AsyncClient, "stream", fake_stream)
     try:
         body = json.dumps({"callback_url": "http://example.com/callback"}).encode()
         response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
@@ -162,6 +165,14 @@ def test_callback_url_safety(monkeypatch):
 
     monkeypatch.setattr(main.socket, "getaddrinfo", private_dns)
     assert main._is_safe_callback_url("https://example.com/")[0] is False
+
+    for nonglobal in ("100.64.0.1", "100.100.100.200"):
+        def cgnat_dns(*_args, **_kwargs):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (nonglobal, 0))]
+
+        monkeypatch.setattr(main.socket, "getaddrinfo", cgnat_dns)
+        assert main._is_safe_callback_url("https://example.com/") == (
+            False, "private_address_not_allowed")
 
     # CALLBACK_ALLOW_HTTP relaxes only the scheme, not the IP/port guard.
     monkeypatch.setattr(main, "CALLBACK_ALLOW_HTTP", True)
@@ -584,12 +595,13 @@ def test_inbound_callback_pinned_delivery(client, monkeypatch):
     def public_dns(*_args, **_kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
-    async def fake_post(_self, url, **kwargs):
+    @contextlib.asynccontextmanager
+    async def fake_stream(_self, method, url, **kwargs):
         captured.append((str(url), kwargs))
-        return httpx.Response(200, request=httpx.Request("POST", url))
+        yield httpx.Response(200, request=httpx.Request(method, url))
 
     monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
-    monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(main.httpx.AsyncClient, "stream", fake_stream)
 
     body = json.dumps({"callback_url": "http://example.test:80/cb"}).encode()
     response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
@@ -632,3 +644,49 @@ def test_ask_grokbot_pending_summary(client, monkeypatch):
     assert result["answer_status"] == "pending"
     assert "wait_for_grokbot_answer" in result["summary"]
     assert result["run_id"] in result["summary"]
+
+
+def test_httpx_loggers_not_info():
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
+
+
+def test_access_log_redacts_callback_token():
+    record = logging.getLogger("uvicorn.access").makeRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "POST", "/callbacks/secrettoken123?run_id=1", "1.1", 200),
+        None,
+    )
+    assert main._RedactCallbackTokenFilter().filter(record) is True
+    message = record.getMessage()
+    assert "/callbacks/[redacted]?run_id=1" in message
+    assert "secrettoken123" not in message
+
+
+def test_inbound_callback_does_not_read_body(client, monkeypatch):
+    def public_dns(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    class ExplodingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            raise AssertionError("body must not be read")
+            yield b""
+
+    @contextlib.asynccontextmanager
+    async def fake_stream(_self, method, url, **kwargs):
+        yield httpx.Response(
+            200, stream=ExplodingStream(), request=httpx.Request(method, url)
+        )
+
+    monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
+    monkeypatch.setattr(main.httpx.AsyncClient, "stream", fake_stream)
+
+    body = json.dumps({"callback_url": "https://example.test/cb"}).encode()
+    response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
+    assert response.status_code == 200
+    assert response.json()["callback"] == "delivered"
+    assert response.json()["callback_status"] == 200
