@@ -92,6 +92,25 @@ Resending to a run that has already been answered may return `HTTP 409` / `alrea
 - Trigger: `{ "type": "webhook" }`
 - Get the webhook URL / key / Authorization header from the routine settings in the Grok Bot app (do not write the values in docs)
 
+### Ready-to-paste routine instructions
+
+```
+When triggered by the webhook, read the payload (webhook_event or equivalent) and headers.
+
+Ignore silently (no chat message, no callback): MCP initialize / notifications, test: true / smoke_test / empty body, anything without a request text.
+Otherwise treat message / text / query / prompt / content as the request.
+
+Correlation ID (most important): the bridge waits on the UUID in run_id. Echo it unchanged. Never invent a new ID. Priority: run_id / runId → request_id / requestId / id → X-Run-Id / X-Request-Id headers. If there is no UUID, report "no UUID" in the chat.
+
+Reply:
+1. Post a short result to this chat.
+2. If callback_url (or reply_url / response_url / reply_to / X-Poke-Callback-Url) exists, POST JSON to it; otherwise write "no callback URL".
+3. Body: {"ok": true, "run_id": "<incoming UUID>", "request_id": "<same>", "answer": "<answer>", "message": "<answer>", "content": "<answer>", "text": "<answer>", "hasMore": false}. On failure: ok:false, error, hasMore:false, same run_id.
+4. If callback_token / reply_token / X-Poke-Callback-Token exists, send Authorization: Bearer <token>. Content-Type: application/json. Never forward the incoming webhook's Authorization header to the callback URL — it is the bridge's key for the webhook, not a callback credential. The bridge's callback URL is already token-scoped, so a POST with no Bearer is normal.
+5. The chat report must include host, echoed run_id (UUID or not), HTTP status, response body summary. A numeric run_id in the response (e.g. 3) is the bridge's receipt number, not the waiting UUID.
+Deliver only to this chat and the explicit callback URL. Do not put the answer in the webhook HTTP response body.
+```
+
 ### Incoming requests to ignore silently (no message to the user, no callback)
 
 - MCP handshakes such as `initialize` / notifications
@@ -146,14 +165,14 @@ On failure:
 
 ### Authentication
 
-If the payload or headers contain `callback_token` / `reply_token` / `X-Poke-Callback-Token` / `Authorization`:
+If the payload or headers contain `callback_token` / `reply_token` / `X-Poke-Callback-Token`:
 
 ```
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-Otherwise, POST without a Bearer token.
+Otherwise, POST without a Bearer token. Never forward the incoming webhook's `Authorization` header to the callback URL — it is the bridge's key for the webhook, not a callback credential. The bridge's callback URL is already token-scoped, so a POST with no Bearer is normal.
 
 ### Items the chat report must include
 
@@ -169,7 +188,7 @@ Otherwise, POST without a Bearer token.
 ### A. Grok Bot side (just verify if already done)
 
 1. The routine with the webhook trigger is enabled
-2. Copy the webhook URL / key / Authorization from the routine settings
+2. Copy the webhook URL / key / Authorization from the routine settings ("POST URL" → `CURSOR_WEBHOOK_URL`, "Key" → `CURSOR_WEBHOOK_API_KEY`)
 3. Put them into the bridge secrets (`CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY`)
 
 ### B. Bridge side

@@ -92,6 +92,25 @@ Poke／ブリッジが待つのは **UUID 形式の `run_id`（または `reques
 - トリガ: `{ "type": "webhook" }`
 - Webhook URL / key / Authorization ヘッダは Grok Bot アプリのルーチン設定から取得する（値はドキュメントに書かない）
 
+### そのまま貼れるルーチン指示
+
+```
+Webhook で起動したら、ペイロード（webhook_event 等）とヘッダを読む。
+
+黙殺する（チャットにもコールバックにも送らない）: MCP initialize / notifications、test: true / smoke_test / 空ボディ、依頼文が無いもの。
+それ以外は message / text / query / prompt / content を依頼文として扱う。
+
+相関 ID（最重要）: ブリッジは run_id の UUID で待っている。必ずそのままエコーする。新しい ID を自分で発行しない。優先順位: run_id / runId → request_id / requestId / id → X-Run-Id / X-Request-Id ヘッダ。UUID が無い場合はチャットに「UUIDなし」と報告。
+
+返答:
+1. このチャットに短い結果を投稿する。
+2. callback_url（または reply_url / response_url / reply_to / X-Poke-Callback-Url）があれば JSON を POST、無ければ「コールバックURLなし」と書く。
+3. ボディ: {"ok": true, "run_id": "<着信UUID>", "request_id": "<同じ>", "answer": "<回答>", "message": "<回答>", "content": "<回答>", "text": "<回答>", "hasMore": false}。失敗時: ok:false、error、hasMore:false、同じ run_id。
+4. callback_token / reply_token / X-Poke-Callback-Token があれば Authorization: Bearer <token> を送る。Content-Type: application/json。着信 webhook の Authorization ヘッダはコールバックに転送しない（webhook 用のキーであり、コールバックの資格情報ではない）。ブリッジのコールバック URL はトークン付きなので Bearer 無しの POST で正常。
+5. チャット報告にはホスト・エコーした run_id（UUID かどうか）・HTTP ステータス・応答ボディ要約を含める。応答の数値 run_id（例: 3）はブリッジの受付番号で、待ち UUID ではない。
+届け先はこのチャットと明示されたコールバック URL のみ。Webhook の HTTP 応答ボディに答えを書かない。
+```
+
 ### 沈黙してよい着信（ユーザーにもコールバックにも送らない）
 
 - MCP `initialize` / notifications などの握手
@@ -146,14 +165,14 @@ Poke／ブリッジが待つのは **UUID 形式の `run_id`（または `reques
 
 ### 認証
 
-ペイロード／ヘッダに `callback_token` / `reply_token` / `X-Poke-Callback-Token` / `Authorization` があれば:
+ペイロード／ヘッダに `callback_token` / `reply_token` / `X-Poke-Callback-Token` があれば:
 
 ```
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-無ければ Bearer なしで POST。
+無ければ Bearer なしで POST。着信 webhook の `Authorization` ヘッダはコールバックに転送しない（webhook 用のキーであり、コールバックの資格情報ではない）。ブリッジのコールバック URL はトークン付きなので Bearer 無しの POST で正常。
 
 ### チャット報告に必ず含める項目
 
@@ -169,7 +188,7 @@ Content-Type: application/json
 ### A. Grok Bot 側（済みなら確認のみ）
 
 1. webhook トリガのルーチンが有効であること
-2. ルーチン設定から Webhook URL / key / Authorization をコピー
+2. ルーチン設定から Webhook URL / key / Authorization をコピー（「POST先」→ `CURSOR_WEBHOOK_URL`、「キー」→ `CURSOR_WEBHOOK_API_KEY`）
 3. ブリッジの secrets（`CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY`）に入れる
 
 ### B. ブリッジ側
