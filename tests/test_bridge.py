@@ -666,6 +666,20 @@ def test_access_log_redacts_callback_token():
     assert "/callbacks/[redacted]?run_id=1" in message
     assert "secrettoken123" not in message
 
+    record = logging.getLogger("uvicorn.access").makeRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "POST", "/callbacks/part1%2Fpart2/rest?x=1", "1.1", 404),
+        None,
+    )
+    main._RedactCallbackTokenFilter().filter(record)
+    message = record.getMessage()
+    assert "/callbacks/[redacted]?x=1" in message
+    assert "part" not in message and "rest" not in message
+
 
 def test_inbound_callback_does_not_read_body(client, monkeypatch):
     def public_dns(*_args, **_kwargs):

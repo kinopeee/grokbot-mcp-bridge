@@ -77,7 +77,7 @@ logger = logging.getLogger("grokbot-bridge")
 for _noisy in ("httpx", "httpcore"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
-_CALLBACK_PATH_RE = re.compile(r"(/callbacks/)[^/?\s]+")
+_CALLBACK_PATH_RE = re.compile(r"(/callbacks/)[^?\s]+")
 
 
 class _RedactCallbackTokenFilter(logging.Filter):
