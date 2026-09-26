@@ -52,6 +52,7 @@ Routine screen: chat header → info panel → Routines → Web webhook.
 | Value | Where you get it | Where you enter it |
 |---|---|---|
 | `INBOUND_WEBHOOK_SECRET` | Generate yourself (optional) | Fly secret (step 2), and the Grok Bot-side push routine if you use `POST /hooks/grokbot` |
+| `CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames the inbound `callback_url` may target (e.g. `callback.example.com`) | Fly secret (step 2), only for push delivery |
 
 Only for push delivery via `POST /hooks/grokbot` (`list_grokbot_events`). Not needed for `ask_grokbot`.
 
@@ -82,6 +83,7 @@ flyctl deploy --remote-only --ha=false -a <app>
 
 - `MCP_API_KEY` and `INBOUND_WEBHOOK_SECRET` are **not** issued by Poke or Cursor; you generate them yourself. `echo "$MCP_API_KEY"` shows it in the same shell — Poke needs the same value in step 3, and Fly does not show secret values again.
 - `INBOUND_WEBHOOK_SECRET` is optional. Without it, `POST /hooks/grokbot` returns 503 and `bridge_status` reports `inbound_webhook_secret_configured: false`; `ask_grokbot` still works.
+- Push delivery via `POST /hooks/grokbot` also needs `CALLBACK_ALLOWED_HOSTS` (e.g. `CALLBACK_ALLOWED_HOSTS=callback.example.com`): an inbound `callback_url` is POSTed to only when its host is on the list, and with the allowlist unset every `callback_url` is rejected.
 
 ### 3. Connect Poke
 

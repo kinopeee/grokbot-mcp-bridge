@@ -16,8 +16,8 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
   - `already_answered`（409）/ `callback_expired`（410, `CALLBACK_TTL_SECONDS`）の判定と、`UPDATE ... WHERE status = 'pending'` による二重回答防止を弱めていないか。
   - `_read_limited_body` の `MAX_CALLBACK_BODY`（256 KiB）チェックは Content-Length の事前チェックと、ボディのストリーム読み途中の中断で行う。`request.body()` で全量をメモリにためる実装への回帰は chunked transfer-encoding で DoS になるため不可。
 - **SSRF ガード** `_is_safe_callback_url` / `_host_matches`
-  - 受信 webhook 本文の `callback_url`（`reply_url` / `response_url`）へ POST する前に必ず通す。https 以外、userinfo 付き、非標準ポート、自ホスト（`ALLOWED_HOSTS`）、`localhost` / `.internal` / `.local`、private / loopback / link-local アドレスは拒否。拒否理由文字列を減らす・順序を変える変更は挙動差分を確認する。
-  - `CALLBACK_ALLOW_HTTP=1` はテスト専用の緩和。本番向けコードパスやドキュメントで既定化していないか。
+  - 受信 webhook 本文の `callback_url`（`reply_url` / `response_url`）へ POST する前に必ず通す。`CALLBACK_ALLOWED_HOSTS` 未設定は全拒否（フェイルクローズ）、許可リスト外ホスト、https 以外、userinfo 付き、80/443 以外のポート、自ホスト（`ALLOWED_HOSTS`）、`localhost` / `.internal` / `.local`、private / loopback / link-local アドレスは拒否。拒否理由文字列を減らす・順序を変える変更は挙動差分を確認する。
+  - `CALLBACK_ALLOW_HTTP=1` はテスト専用の緩和で、http スキームの許可のみ（許可リスト・IP/ポート検査は常に有効）。本番向けコードパスやドキュメントで既定化していないか。
 - **秘密比較** はすべて `hmac.compare_digest` を使う。`==` での比較や、キーの一部をログ・レスポンス・例外メッセージに出す変更は不可。
 
 ## 汎用性・命名（AGENTS.md の規約を強制する）

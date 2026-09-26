@@ -8,6 +8,7 @@ import socket
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,7 @@ os.environ["CURSOR_WEBHOOK_API_KEY"] = "x"
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "bridge.db")
 os.environ["ALLOWED_HOSTS"] = "testserver"
 os.environ["CALLBACK_ALLOW_HTTP"] = "1"
+os.environ["CALLBACK_ALLOWED_HOSTS"] = "example.com,example.test"
 
 from app import main
 
@@ -95,14 +97,37 @@ class CallbackHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def test_inbound_delivers_callback(client):
+def test_inbound_delivers_callback(client, monkeypatch):
     CallbackHandler.requests = []
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), CallbackHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    local_url = f"http://127.0.0.1:{server.server_port}/callback"
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def public_dns(host, *args, **kwargs):
+        if host == "127.0.0.1":
+            return real_getaddrinfo(host, *args, **kwargs)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    async def forward_post(_self, url, **kwargs):
+        # The handler must dial the DNS-pinned address with the original Host header.
+        assert urlparse(url).hostname == "93.184.216.34"
+        assert kwargs["headers"]["Host"] == "example.com"
+        request = urllib.request.Request(
+            local_url,
+            data=json.dumps(kwargs["json"]).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(request)
+        return httpx.Response(200, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
+    monkeypatch.setattr(main.httpx.AsyncClient, "post", forward_post)
     try:
-        url = f"http://127.0.0.1:{server.server_port}/callback"
-        body = json.dumps({"callback_url": url}).encode()
+        body = json.dumps({"callback_url": "http://example.com/callback"}).encode()
         response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
         assert response.status_code == 200
         assert response.json()["callback"] == "delivered"
@@ -118,11 +143,13 @@ def test_inbound_delivers_callback(client):
 
 def test_callback_url_safety(monkeypatch):
     monkeypatch.setattr(main, "CALLBACK_ALLOW_HTTP", False)
+    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", ["example.com"])
     assert main._is_safe_callback_url("https://127.0.0.1/")[0] is False
     assert main._is_safe_callback_url("https://localhost/")[0] is False
     assert main._is_safe_callback_url("http://example.com/")[0] is False
     assert main._is_safe_callback_url("https://user@example.com/")[0] is False
     assert main._is_safe_callback_url("https://testserver/")[0] is False
+    assert main._is_safe_callback_url("https://example.org/")[1] == "host_not_allowed"
 
     def public_dns(*_args, **_kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
@@ -135,6 +162,20 @@ def test_callback_url_safety(monkeypatch):
 
     monkeypatch.setattr(main.socket, "getaddrinfo", private_dns)
     assert main._is_safe_callback_url("https://example.com/")[0] is False
+
+    # CALLBACK_ALLOW_HTTP relaxes only the scheme, not the IP/port guard.
+    monkeypatch.setattr(main, "CALLBACK_ALLOW_HTTP", True)
+    assert main._is_safe_callback_url("http://example.com/")[0] is False
+    monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
+    assert main._is_safe_callback_url("http://example.com/")[0] is True
+    assert main._is_safe_callback_url("http://example.com:8080/") == (False, "port_not_allowed")
+    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", ["169.254.169.254", "127.0.0.1"])
+    assert main._is_safe_callback_url("http://169.254.169.254/") == (False, "private_address_not_allowed")
+    assert main._is_safe_callback_url("http://127.0.0.1/") == (False, "private_address_not_allowed")
+
+    # An unset allowlist fails closed.
+    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", [])
+    assert main._is_safe_callback_url("https://example.com/") == (False, "allowed_hosts_not_configured")
 
 
 def test_ask_grokbot_callback_capture_and_duplicate(client, monkeypatch):
@@ -540,33 +581,40 @@ def test_inspect_callback_url_returns_addresses(monkeypatch):
 def test_inbound_callback_pinned_delivery(client, monkeypatch):
     captured = []
 
-    def local_dns(*_args, **_kwargs):
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+    def public_dns(*_args, **_kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
     async def fake_post(_self, url, **kwargs):
         captured.append((str(url), kwargs))
         return httpx.Response(200, request=httpx.Request("POST", url))
 
-    monkeypatch.setattr(main.socket, "getaddrinfo", local_dns)
+    monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
     monkeypatch.setattr(main.httpx.AsyncClient, "post", fake_post)
 
-    body = json.dumps({"callback_url": "http://example.test:8123/cb"}).encode()
+    body = json.dumps({"callback_url": "http://example.test:80/cb"}).encode()
     response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
     assert response.status_code == 200
     assert response.json()["callback"] == "delivered"
     url, kwargs = captured[-1]
-    assert urlparse(url).hostname == "127.0.0.1"
-    assert urlparse(url).port == 8123
-    assert kwargs["headers"]["Host"] == "example.test:8123"
+    assert urlparse(url).hostname == "93.184.216.34"
+    assert urlparse(url).port == 80
+    assert kwargs["headers"]["Host"] == "example.test"
 
     body = json.dumps({"callback_url": "https://example.test/cb"}).encode()
     response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
     assert response.status_code == 200
     assert response.json()["callback"] == "delivered"
     url, kwargs = captured[-1]
-    assert urlparse(url).hostname == "127.0.0.1"
+    assert urlparse(url).hostname == "93.184.216.34"
     assert kwargs["headers"]["Host"] == "example.test"
     assert kwargs["extensions"] == {"sni_hostname": "example.test"}
+
+    body = json.dumps({"callback_url": "https://internal.example/cb"}).encode()
+    response = client.post("/hooks/grokbot", content=body, headers=signed_headers(body))
+    assert response.status_code == 200
+    assert response.json()["callback"] == "rejected"
+    assert response.json()["callback_error"] == "host_not_allowed"
+    assert len(captured) == 2
 
 
 def test_ask_grokbot_pending_summary(client, monkeypatch):

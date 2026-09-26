@@ -90,7 +90,7 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 - 認証: `X-Webhook-Signature: sha256=<HMAC-SHA256(body, INBOUND_WEBHOOK_SECRET)>` または `Authorization: Bearer <INBOUND_WEBHOOK_SECRET>`
 - 任意のリプレイ対策: `X-Webhook-Timestamp: <unix 秒>` を送る場合、署名は `"<ts>." + body` に対して計算し、タイムスタンプはサーバー時刻から `INBOUND_TIMESTAMP_TOLERANCE_SECONDS`（既定 300）秒以内である必要がある。ヘッダーがなければ従来の本文のみの署名も引き続き有効。
 - 本文は最大 256 KB。超過時は `413 {"error":"body_too_large"}`。
-- 本文に `callback_url`（または `reply_url` / `response_url`）があれば、公開 https URL のみ（SSRF ガード: private/loopback/link-local/自ホスト等は拒否）に `{"ok":true,"answer":"受信しました (event_id=N)"}` を POST。
+- 本文に `callback_url`（または `reply_url` / `response_url`）があれば、`CALLBACK_ALLOWED_HOSTS` に列挙されたホストの公開 https URL のみ（SSRF ガード: 許可リストは必須で、未設定なら全コールバック URL を拒否。private/loopback/link-local/自ホスト/80・443 以外のポートは常に拒否）に `{"ok":true,"answer":"受信しました (event_id=N)"}` を POST。`CALLBACK_ALLOW_HTTP=1` は `http` スキームを許可するだけで、許可リスト・IP レンジ・ポートの検査は緩和しない。
 - ない場合は `{"ok":true,"event_id":N,"callback":"none","note":"コールバックURLなし"}` を返す。
 
 ## 7. 環境変数（Fly secrets）
@@ -102,7 +102,8 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 | `INBOUND_WEBHOOK_SECRET` | 運用者が生成 | 任意。未設定なら `/hooks/grokbot` は 503（`ask_grokbot` には影響なし） |
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Fly では必須（DNS rebinding 対策と `PUBLIC_BASE_URL` の既定値） |
 | `DB_PATH` | `/data/bridge.db` | イメージでは `/data/bridge.db` が既定（Dockerfile `ENV`）で上書き可能。Fly ではボリューム `bridge_data` を指す |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意 |
+| `CALLBACK_ALLOWED_HOSTS` | 受信 `callback_url` の宛先を許可するホスト名（カンマ区切り） | 任意。ただし未設定なら受信 `callback_url` はすべて拒否（フェイルクローズ） |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意 |
 
 ## 8. 運用手順
 
