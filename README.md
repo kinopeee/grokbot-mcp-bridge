@@ -96,7 +96,7 @@ Add an MCP integration in Poke with:
 ### 4. Verify end to end
 
 1. `GET https://<app>.fly.dev/healthz` → `200 {"ok":true}`
-2. From Poke, call `bridge_status` → every `*_configured` field is `true`
+2. From Poke, call `bridge_status` → `webhook_url_configured` and `webhook_api_key_configured` are `true` (`inbound_webhook_secret_configured` is `false` if you skipped the optional secret — that is fine)
 3. From Poke, call `ask_grokbot` with `payload={"message": "Introduce yourself briefly."}`, `wait_seconds=60`
    - `answer_status: "answered"` → `answer_text` holds the reply
    - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id, timeout_seconds=120)`
