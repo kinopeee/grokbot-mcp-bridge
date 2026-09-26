@@ -83,13 +83,13 @@ flyctl deploy --remote-only --ha=false -a <app>
 
 - `MCP_API_KEY` と `INBOUND_WEBHOOK_SECRET` は Poke や Cursor から発行されるものでは**なく**、自分で生成する値。`echo "$MCP_API_KEY"` で同じシェル内で確認できる（手順 3 で Poke に同じ値を入れる。Fly はシークレットの値を再表示しない）。
 - `INBOUND_WEBHOOK_SECRET` は任意。未設定でも `ask_grokbot` は動くが、`POST /hooks/grokbot` が 503 になり、`bridge_status` の `inbound_webhook_secret_configured` が `false` になる。
-- `POST /hooks/grokbot` のプッシュ配信では `CALLBACK_ALLOWED_HOSTS` も必要。値は Grok Bot のルーチンが webhook 本文に入れる `callback_url` のホスト名（複数はカンマ区切り。`example.com` と書くと `api.example.com` も含む）。過去のイベントで使われた宛先は、Poke から `list_grokbot_events` → `get_grokbot_event(id)` を呼んで `body.callback_url` を見れば分かる。
+- `POST /hooks/grokbot` のプッシュ配信では `CALLBACK_ALLOWED_HOSTS` も必要。値は Grok Bot のルーチンが webhook 本文に入れる `callback_url` のホスト名（複数はカンマ区切り。`example.com` と書くと `api.example.com` も含む）。過去のイベントで使われた宛先は、Poke から `list_grokbot_events` → `get_grokbot_event(id)` を呼んで `body.callback_url` / `reply_url` / `response_url` を見れば分かる。
 
   ```bash
   flyctl secrets set -a <app> CALLBACK_ALLOWED_HOSTS=callback.example.com
   ```
 
-  未設定の場合、受信した `callback_url` はすべて `callback_error: "allowed_hosts_not_configured"` で拒否される（イベント自体は記録され、`ask_grokbot` には影響なし）。
+  未設定の場合、受信した `callback_url` はすべて拒否される（正しい https URL なら `callback_error: "allowed_hosts_not_configured"`。それ以外の URL はより前の検査で拒否）。イベント自体は記録され、`ask_grokbot` には影響なし。
 
 ### 3. Poke を接続する
 
