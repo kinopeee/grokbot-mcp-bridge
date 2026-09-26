@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import sqlite3
@@ -73,6 +74,26 @@ INBOUND_TIMESTAMP_TOLERANCE = int(
     os.environ.get("INBOUND_TIMESTAMP_TOLERANCE_SECONDS", "300")
 )
 logger = logging.getLogger("grokbot-bridge")
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+_CALLBACK_PATH_RE = re.compile(r"(/callbacks/)[^?\s]+")
+
+
+class _RedactCallbackTokenFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _CALLBACK_PATH_RE.sub(r"\1[redacted]", a) if isinstance(a, str) else a
+                for a in record.args
+            )
+        if isinstance(record.msg, str):
+            record.msg = _CALLBACK_PATH_RE.sub(r"\1[redacted]", record.msg)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactCallbackTokenFilter())
+
 _answer_waiters: dict[str, asyncio.Event] = {}
 _schema_ready: set[str] = set()
 
@@ -334,6 +355,7 @@ def _inspect_callback_url(url: str) -> tuple[bool, str, list[str]]:
                 or checked.is_multicast
                 or checked.is_reserved
                 or checked.is_unspecified
+                or not checked.is_global
             ):
                 return False, "private_address_not_allowed", []
         return True, "ok", [str(address) for address in addresses]
@@ -454,7 +476,7 @@ async def ask_grokbot(payload: dict[str, Any], wait_seconds: int = 45) -> str:
         )
         result.update({"ok": resp.is_success, "status_code": resp.status_code, "response": body})
     except httpx.HTTPError as exc:
-        result.update({"error": "upstream_request_failed", "detail": str(exc)[:500]})
+        result.update({"error": "upstream_request_failed", "detail": type(exc).__name__})
 
     timeout = max(0, min(int(wait_seconds), 120))
     waited = 0.0
@@ -866,7 +888,8 @@ async def inbound_grokbot_webhook(request: Request):
         async with httpx.AsyncClient(
             timeout=10.0, follow_redirects=False, trust_env=False
         ) as client:
-            response = await client.post(
+            async with client.stream(
+                "POST",
                 pinned_url,
                 json={"ok": True, "answer": f"受信しました (event_id={event_id})"},
                 headers={
@@ -877,10 +900,11 @@ async def inbound_grokbot_webhook(request: Request):
                 extensions={"sni_hostname": callback_hostname}
                 if parsed_callback.scheme == "https"
                 else None,
-            )
-        callback_status = response.status_code
-        if not response.is_success:
-            callback_error = f"callback_http_status_{response.status_code}"
+            ) as response:
+                callback_status = response.status_code
+                callback_success = response.is_success
+        if not callback_success:
+            callback_error = f"callback_http_status_{callback_status}"
             callback_result = "failed"
         else:
             callback_result = "delivered"
