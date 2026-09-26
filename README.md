@@ -17,11 +17,28 @@ Poke can call the bridge without receiving the webhook URL or API key.
 
 `<app>` below is `app` in `fly.toml` (defaults to `grokbot-mcp-bridge`).
 
+### 0. Which value goes where
+
+| Value | Where you get it | Where you enter it |
+|---|---|---|
+| `CURSOR_WEBHOOK_URL` | Grok Bot app → the routine with the **Web webhook** trigger → "POST URL" (`https://api2.cursor.sh/automations/webhook/…`) | Fly secret on the bridge (step 2) |
+| `CURSOR_WEBHOOK_API_KEY` | Same screen → "Key" (`crsr_…`). Copy only the key, not the `Authorization: Bearer` header line | Fly secret on the bridge (step 2) |
+| `MCP_API_KEY` | Generate yourself (`openssl rand -hex 32`) | Fly secret (step 2) **and** Poke → New Integration → "API Key" (step 3) — same value in both |
+| `INBOUND_WEBHOOK_SECRET` | Generate yourself (optional) | Fly secret (step 2), and the Grok Bot-side push routine if you use `POST /hooks/grokbot` |
+| `https://<app>.fly.dev/mcp` | Fixed by the bridge | Poke → New Integration → "Server URL" (step 3) |
+| Grok Bot routine instructions | This repo: [poke-invocation.md § 4](poke-invocation.md#4-incoming-webhook-bridge--grok-bot) (ready-to-paste template) | Grok Bot app → the same routine → "Instructions" field |
+
+Routine screen: chat header → info panel → Routines → Web webhook.
+
 ### 1. Prepare the Grok Bot webhook
 
 In the Cursor automation that runs Grok Bot, enable the webhook trigger and copy its URL and `crsr_…` API key. They become `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` and are stored only on the bridge — Poke never sees them.
 
+The routine's Instructions field must tell Grok Bot to echo `run_id` and POST the answer to `callback_url` — paste the template from [poke-invocation.md § 4](poke-invocation.md#4-incoming-webhook-bridge--grok-bot).
+
 ### 2. Deploy the bridge to Fly.io
+
+Log in with `flyctl auth login`, or for non-interactive use create a token at https://fly.io/tokens and export it as `FLY_API_TOKEN` (tokens have an expiry you choose at creation; renew before it lapses).
 
 ```bash
 flyctl apps create <app>
@@ -45,8 +62,9 @@ Add an MCP integration in Poke with:
 
 | Field | Value |
 |---|---|
+| Name | any label, e.g. `grokbot-mcp-bridge` |
 | Server URL | `https://<app>.fly.dev/mcp` (Streamable HTTP). Use `https://<app>.fly.dev/sse` if the client only supports SSE |
-| API Key | the value of `MCP_API_KEY` (no `Bearer ` prefix) |
+| API Key | the value of `MCP_API_KEY` (no `Bearer ` prefix). Poke labels this field optional, but leave it empty and Poke will try OAuth and fail — always set it |
 
 ### 4. Verify end to end
 
