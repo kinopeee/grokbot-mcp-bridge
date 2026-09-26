@@ -41,19 +41,21 @@ Grok Bot を動かしている Cursor automation で webhook トリガーを有�
 `flyctl auth login` でログインするか、非対話利用なら https://fly.io/tokens でトークンを作成して `FLY_API_TOKEN` に export する（トークンには作成時に選ぶ有効期限がある。切れる前に更新すること）。
 
 ```bash
+export MCP_API_KEY="$(openssl rand -hex 32)"            # この値を控える: 手順 3 で Poke に必要
+export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # 任意
 flyctl apps create <app>
 flyctl volumes create bridge_data -r <region> -s 1 -a <app> --yes   # SQLite を /data に置く
 flyctl secrets set -a <app> \
   CURSOR_WEBHOOK_URL="$CURSOR_WEBHOOK_URL" \
   CURSOR_WEBHOOK_API_KEY="$CURSOR_WEBHOOK_API_KEY" \
-  MCP_API_KEY="$(openssl rand -hex 32)" \
-  INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" \
+  MCP_API_KEY="$MCP_API_KEY" \
+  INBOUND_WEBHOOK_SECRET="$INBOUND_WEBHOOK_SECRET" \
   ALLOWED_HOSTS=<app>.fly.dev \
   DB_PATH=/data/bridge.db
 flyctl deploy --remote-only --ha=false -a <app>
 ```
 
-- `MCP_API_KEY` と `INBOUND_WEBHOOK_SECRET` は Poke や Cursor から発行されるものでは**なく**、自分で生成する値。生成した `MCP_API_KEY` は手元に控えること（手順 3 で Poke に同じ値を入れる。Fly はシークレットの値を再表示しない）。
+- `MCP_API_KEY` と `INBOUND_WEBHOOK_SECRET` は Poke や Cursor から発行されるものでは**なく**、自分で生成する値。`echo "$MCP_API_KEY"` で同じシェル内で確認できる（手順 3 で Poke に同じ値を入れる。Fly はシークレットの値を再表示しない）。
 - `INBOUND_WEBHOOK_SECRET` は任意。未設定でも `ask_grokbot` は動くが、`POST /hooks/grokbot` が 503 になり、`bridge_status` の `inbound_webhook_secret_configured` が `false` になる。
 
 ### 3. Poke を接続する

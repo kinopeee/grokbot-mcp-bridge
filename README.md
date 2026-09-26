@@ -41,19 +41,21 @@ The routine's Instructions field must tell Grok Bot to echo `run_id` and POST th
 Log in with `flyctl auth login`, or for non-interactive use create a token at https://fly.io/tokens and export it as `FLY_API_TOKEN` (tokens have an expiry you choose at creation; renew before it lapses).
 
 ```bash
+export MCP_API_KEY="$(openssl rand -hex 32)"            # keep this value: Poke needs it in step 3
+export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # optional
 flyctl apps create <app>
 flyctl volumes create bridge_data -r <region> -s 1 -a <app> --yes   # SQLite lives on /data
 flyctl secrets set -a <app> \
   CURSOR_WEBHOOK_URL="$CURSOR_WEBHOOK_URL" \
   CURSOR_WEBHOOK_API_KEY="$CURSOR_WEBHOOK_API_KEY" \
-  MCP_API_KEY="$(openssl rand -hex 32)" \
-  INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" \
+  MCP_API_KEY="$MCP_API_KEY" \
+  INBOUND_WEBHOOK_SECRET="$INBOUND_WEBHOOK_SECRET" \
   ALLOWED_HOSTS=<app>.fly.dev \
   DB_PATH=/data/bridge.db
 flyctl deploy --remote-only --ha=false -a <app>
 ```
 
-- `MCP_API_KEY` and `INBOUND_WEBHOOK_SECRET` are **not** issued by Poke or Cursor; you generate them yourself. Keep the generated `MCP_API_KEY` — Poke needs the same value in step 3, and Fly does not show secret values again.
+- `MCP_API_KEY` and `INBOUND_WEBHOOK_SECRET` are **not** issued by Poke or Cursor; you generate them yourself. `echo "$MCP_API_KEY"` shows it in the same shell — Poke needs the same value in step 3, and Fly does not show secret values again.
 - `INBOUND_WEBHOOK_SECRET` is optional. Without it, `POST /hooks/grokbot` returns 503 and `bridge_status` reports `inbound_webhook_secret_configured: false`; `ask_grokbot` still works.
 
 ### 3. Connect Poke

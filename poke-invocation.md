@@ -106,7 +106,7 @@ Reply:
 1. Post a short result to this chat.
 2. If callback_url (or reply_url / response_url / reply_to / X-Poke-Callback-Url) exists, POST JSON to it; otherwise write "no callback URL".
 3. Body: {"ok": true, "run_id": "<incoming UUID>", "request_id": "<same>", "answer": "<answer>", "message": "<answer>", "content": "<answer>", "text": "<answer>", "hasMore": false}. On failure: ok:false, error, hasMore:false, same run_id.
-4. If callback_token / reply_token / X-Poke-Callback-Token / Authorization exists, send Authorization: Bearer <token>. Content-Type: application/json.
+4. If callback_token / reply_token / X-Poke-Callback-Token exists, send Authorization: Bearer <token>. Content-Type: application/json. Never forward the incoming webhook's Authorization header to the callback URL — it is the bridge's key for the webhook, not a callback credential. The bridge's callback URL is already token-scoped, so a POST with no Bearer is normal.
 5. The chat report must include host, echoed run_id (UUID or not), HTTP status, response body summary. A numeric run_id in the response (e.g. 3) is the bridge's receipt number, not the waiting UUID.
 Deliver only to this chat and the explicit callback URL. Do not put the answer in the webhook HTTP response body.
 ```
@@ -165,14 +165,14 @@ On failure:
 
 ### Authentication
 
-If the payload or headers contain `callback_token` / `reply_token` / `X-Poke-Callback-Token` / `Authorization`:
+If the payload or headers contain `callback_token` / `reply_token` / `X-Poke-Callback-Token`:
 
 ```
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
-Otherwise, POST without a Bearer token.
+Otherwise, POST without a Bearer token. Never forward the incoming webhook's `Authorization` header to the callback URL — it is the bridge's key for the webhook, not a callback credential. The bridge's callback URL is already token-scoped, so a POST with no Bearer is normal.
 
 ### Items the chat report must include
 
