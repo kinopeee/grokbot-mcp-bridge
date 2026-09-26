@@ -2,8 +2,24 @@
 
 [English](README.md) | 日本語
 
-Cursor automation の webhook 上で動く Grok Bot につなぐ、セキュアな MCP ブリッジです。
-Poke は webhook の URL や API キーを受け取らずにブリッジを呼び出せます。
+**何をするものか:** Poke（または任意の MCP クライアント）から Grok Bot に質問を投げ、回答を通常のツール結果として受け取れるようにする。Grok Bot は webhook コールバックで非同期にしか返せないが、その差を吸収する。
+
+**誰向けか:** Fly.io に小さなアプリをデプロイでき、Web webhook トリガ付きの Grok Bot ルーチンを持っている人。MCP の内部知識は不要。下のクイックスタートはコピペで進められる。
+
+**どうやるか:** Cursor の webhook URL／キーはブリッジ側にだけ持つので、Poke が見るのはブリッジの URL と自分で生成する API キー 1 つだけ。
+
+## 流れ
+
+```mermaid
+sequenceDiagram
+    participant P as Poke（MCP クライアント）
+    participant B as ブリッジ（https://<app>.fly.dev）
+    participant G as Grok Bot ルーチン
+    P->>B: tools/call ask_grokbot（Bearer MCP_API_KEY）
+    B->>G: Webhook POST（run_id, callback_url）
+    G-->>B: POST /callbacks/{token}（回答, run_id）
+    B-->>P: answer_text
+```
 
 ## ドキュメント
 
@@ -19,16 +35,25 @@ Poke は webhook の URL や API キーを受け取らずにブリッジを呼�
 
 ### 0. どの値をどこに入れるか
 
+#### 必須（秘密 3 つ + URL 1 つ）
+
 | 値 | どこで取得するか | どこに入れるか |
 |---|---|---|
 | `CURSOR_WEBHOOK_URL` | Grok Bot アプリ → **Web webhook** トリガのルーチン → 「POST先」（`https://api2.cursor.sh/automations/webhook/…`） | ブリッジの Fly secret（手順 2） |
 | `CURSOR_WEBHOOK_API_KEY` | 同じ画面 → 「キー」（`crsr_…`）。`Authorization: Bearer` の行ではなくキーの値だけをコピー | ブリッジの Fly secret（手順 2） |
 | `MCP_API_KEY` | 自分で生成（`openssl rand -hex 32`） | Fly secret（手順 2）**と** Poke → New Integration → 「API Key」（手順 3）— 両方に同じ値 |
-| `INBOUND_WEBHOOK_SECRET` | 自分で生成（任意） | Fly secret（手順 2）、`POST /hooks/grokbot` を使う場合は Grok Bot 側のプッシュルーチンにも |
 | `https://<app>.fly.dev/mcp` | ブリッジ固定 | Poke → New Integration → 「Server URL」（手順 3） |
 | Grok Bot ルーチンの指示 | このリポジトリ: [poke-invocation.ja.md § 4](poke-invocation.ja.md#4-webhook-着信ブリッジ--grok-bot)（貼るだけテンプレート） | Grok Bot アプリ → 同じルーチン → 「指示」欄 |
 
 ルーチン画面: チャット見出し → 情報パネル → Routines → Web webhook.
+
+#### 任意（初回は不要）
+
+| 値 | どこで取得するか | どこに入れるか |
+|---|---|---|
+| `INBOUND_WEBHOOK_SECRET` | 自分で生成（任意） | Fly secret（手順 2）、`POST /hooks/grokbot` を使う場合は Grok Bot 側のプッシュルーチンにも |
+
+`POST /hooks/grokbot`（`list_grokbot_events`）によるプッシュ配信だけに必要。`ask_grokbot` には不要。
 
 ### 1. Grok Bot 側の webhook を用意する
 
@@ -42,7 +67,7 @@ Grok Bot を動かしている Cursor automation で webhook トリガーを有�
 
 ```bash
 export MCP_API_KEY="$(openssl rand -hex 32)"            # この値を控える: 手順 3 で Poke に必要
-export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # 任意
+export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # 任意（プッシュ配信のみ）
 flyctl apps create <app>
 flyctl volumes create bridge_data -r <region> -s 1 -a <app> --yes   # SQLite を /data に置く
 flyctl secrets set -a <app> \
@@ -71,10 +96,23 @@ Poke で MCP インテグレーションを追加し、次を入力する。
 ### 4. 疎通を確認する
 
 1. `GET https://<app>.fly.dev/healthz` → `200 {"ok":true}`
-2. Poke から `bridge_status` を呼ぶ → `*_configured` がすべて `true`
+2. Poke から `bridge_status` を呼ぶ → `webhook_url_configured` と `webhook_api_key_configured` が `true`（任意の秘密を飛ばした場合 `inbound_webhook_secret_configured` は `false` で問題ない）
 3. Poke から `ask_grokbot` を `payload={"message": "短く自己紹介してください。"}`、`wait_seconds=60` で呼ぶ
    - `answer_status: "answered"` → `answer_text` に回答が入る
    - `answer_status: "pending"` → `wait_for_grokbot_answer(run_id, timeout_seconds=120)` を呼ぶ
+
+   応答例:
+
+   ```json
+   {
+     "ok": true,
+     "run_id": "06eec502-cf7b-468d-8307-8dcf945e1f17",
+     "answer_status": "answered",
+     "answer_text": "…回答本文…",
+     "summary": "Grok Bot answered: …"
+   }
+   ```
+
 4. `flyctl logs -a <app>` に `run created` → `callback resolved` → `trigger returning` が並ぶ
 
 Grok Bot 側の契約（`run_id` のエコー、`callback_url` への POST）とトラブルシューティングは [poke-invocation.ja.md](poke-invocation.ja.md) を参照。
