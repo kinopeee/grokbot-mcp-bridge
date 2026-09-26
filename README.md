@@ -164,3 +164,7 @@ uv run --extra dev pytest -q               # tests
 uv lock && uv export --no-dev --format requirements-txt --no-emit-project -o requirements.txt   # update pinned deps
 flyctl deploy --remote-only --ha=false     # deploy (app / region come from fly.toml)
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

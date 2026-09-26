@@ -7,6 +7,7 @@ name = "grokbot-mcp-bridge"
 version = "0.1.0"
 description = "Secure MCP bridge to Grok Bot (Cursor automation webhook), Poke-ready"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
