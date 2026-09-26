@@ -2,8 +2,24 @@
 
 English | [日本語](README.ja.md)
 
-Secure MCP bridge to a Grok Bot running through a Cursor automation webhook.
-Poke can call the bridge without receiving the webhook URL or API key.
+**What it does:** lets Poke — or any MCP client — ask a Grok Bot a question and get the answer back as a normal tool result, even though Grok Bot can only reply asynchronously via a webhook callback.
+
+**Who it is for:** anyone who can deploy a small app to Fly.io and has a Grok Bot routine with a Web webhook trigger. No knowledge of MCP internals is needed; the quick start below is copy-paste.
+
+**How:** the bridge holds the Cursor webhook URL/key server-side, so Poke only ever sees the bridge URL and one API key you generate.
+
+## How it flows
+
+```mermaid
+sequenceDiagram
+    participant P as Poke (MCP client)
+    participant B as Bridge (https://<app>.fly.dev)
+    participant G as Grok Bot routine
+    P->>B: tools/call ask_grokbot (Bearer MCP_API_KEY)
+    B->>G: POST webhook (run_id, callback_url)
+    G-->>B: POST /callbacks/{token} (answer, run_id)
+    B-->>P: answer_text
+```
 
 ## Documentation
 
@@ -19,16 +35,25 @@ Poke can call the bridge without receiving the webhook URL or API key.
 
 ### 0. Which value goes where
 
+#### Required (3 secrets + 1 URL)
+
 | Value | Where you get it | Where you enter it |
 |---|---|---|
 | `CURSOR_WEBHOOK_URL` | Grok Bot app → the routine with the **Web webhook** trigger → "POST URL" (`https://api2.cursor.sh/automations/webhook/…`) | Fly secret on the bridge (step 2) |
 | `CURSOR_WEBHOOK_API_KEY` | Same screen → "Key" (`crsr_…`). Copy only the key, not the `Authorization: Bearer` header line | Fly secret on the bridge (step 2) |
 | `MCP_API_KEY` | Generate yourself (`openssl rand -hex 32`) | Fly secret (step 2) **and** Poke → New Integration → "API Key" (step 3) — same value in both |
-| `INBOUND_WEBHOOK_SECRET` | Generate yourself (optional) | Fly secret (step 2), and the Grok Bot-side push routine if you use `POST /hooks/grokbot` |
 | `https://<app>.fly.dev/mcp` | Fixed by the bridge | Poke → New Integration → "Server URL" (step 3) |
 | Grok Bot routine instructions | This repo: [poke-invocation.md § 4](poke-invocation.md#4-incoming-webhook-bridge--grok-bot) (ready-to-paste template) | Grok Bot app → the same routine → "Instructions" field |
 
 Routine screen: chat header → info panel → Routines → Web webhook.
+
+#### Optional (skip on first setup)
+
+| Value | Where you get it | Where you enter it |
+|---|---|---|
+| `INBOUND_WEBHOOK_SECRET` | Generate yourself (optional) | Fly secret (step 2), and the Grok Bot-side push routine if you use `POST /hooks/grokbot` |
+
+Only for push delivery via `POST /hooks/grokbot` (`list_grokbot_events`). Not needed for `ask_grokbot`.
 
 ### 1. Prepare the Grok Bot webhook
 
@@ -42,7 +67,7 @@ Log in with `flyctl auth login`, or for non-interactive use create a token at ht
 
 ```bash
 export MCP_API_KEY="$(openssl rand -hex 32)"            # keep this value: Poke needs it in step 3
-export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # optional
+export INBOUND_WEBHOOK_SECRET="$(openssl rand -hex 32)" # optional (push delivery only)
 flyctl apps create <app>
 flyctl volumes create bridge_data -r <region> -s 1 -a <app> --yes   # SQLite lives on /data
 flyctl secrets set -a <app> \
@@ -75,6 +100,19 @@ Add an MCP integration in Poke with:
 3. From Poke, call `ask_grokbot` with `payload={"message": "Introduce yourself briefly."}`, `wait_seconds=60`
    - `answer_status: "answered"` → `answer_text` holds the reply
    - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id, timeout_seconds=120)`
+
+   Sample result:
+
+   ```json
+   {
+     "ok": true,
+     "run_id": "06eec502-cf7b-468d-8307-8dcf945e1f17",
+     "answer_status": "answered",
+     "answer_text": "…the reply text…",
+     "summary": "Grok Bot answered: …"
+   }
+   ```
+
 4. `flyctl logs -a <app>` shows `run created` → `callback resolved` → `trigger returning`
 
 For the Grok Bot-side contract (echoing `run_id`, posting to `callback_url`) and troubleshooting, see [poke-invocation.md](poke-invocation.md).
