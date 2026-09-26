@@ -14,7 +14,7 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
 - **コールバック解決** `_resolve_callback` / `/callbacks/{token}`
   - `token` と本文の `run_id`（または `request_id`）の両方で照合し、不一致は 400。
   - `already_answered`（409）/ `callback_expired`（410, `CALLBACK_TTL_SECONDS`）の判定と、`UPDATE ... WHERE status = 'pending'` による二重回答防止を弱めていないか。
-  - `_read_callback_body` の `MAX_CALLBACK_BODY`（256 KiB）チェックは Content-Length と実ボディの両方で行う。
+  - `_read_limited_body` の `MAX_CALLBACK_BODY`（256 KiB）チェックは Content-Length の事前チェックと、ボディのストリーム読み途中の中断で行う。`request.body()` で全量をメモリにためる実装への回帰は chunked transfer-encoding で DoS になるため不可。
 - **SSRF ガード** `_is_safe_callback_url` / `_host_matches`
   - 受信 webhook 本文の `callback_url`（`reply_url` / `response_url`）へ POST する前に必ず通す。https 以外、userinfo 付き、非標準ポート、自ホスト（`ALLOWED_HOSTS`）、`localhost` / `.internal` / `.local`、private / loopback / link-local アドレスは拒否。拒否理由文字列を減らす・順序を変える変更は挙動差分を確認する。
   - `CALLBACK_ALLOW_HTTP=1` はテスト専用の緩和。本番向けコードパスやドキュメントで既定化していないか。

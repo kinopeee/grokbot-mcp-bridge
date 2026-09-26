@@ -393,6 +393,65 @@ def test_body_too_large(client):
     assert response.json()["error"] == "body_too_large"
 
 
+def test_chunked_body_too_large(client):
+    # Generator content is sent with Transfer-Encoding: chunked and no
+    # Content-Length, bypassing the pre-read header check.
+    def chunks():
+        yield b'{"x":"'
+        yield b"a" * (300 * 1024)
+        yield b'"}'
+
+    response = client.post(
+        "/callbacks/some-token", content=chunks(),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "body_too_large"
+    response = client.post("/hooks/grokbot", content=chunks())
+    assert response.status_code == 413
+    assert response.json()["error"] == "body_too_large"
+
+
+def test_limited_body_aborts_stream():
+    # A body streamed without Content-Length must stop being consumed as soon
+    # as the cap is exceeded, not buffered to completion.
+    calls = []
+
+    async def receive():
+        calls.append(1)
+        if len(calls) == 1:
+            return {
+                "type": "http.request",
+                "body": b"a" * (300 * 1024),
+                "more_body": True,
+            }
+        raise AssertionError("stream should have been aborted")
+
+    request = main.Request(
+        {"type": "http", "method": "POST", "path": "/callbacks/t",
+         "headers": [], "query_string": b""},
+        receive,
+    )
+    result = asyncio.run(main._read_limited_body(request))
+    assert isinstance(result, main.JSONResponse)
+    assert result.status_code == 413
+    assert len(calls) == 1
+
+
+def test_chunked_body_under_limit(client):
+    def chunks():
+        yield b'{"run_id": "'
+        yield str(uuid.uuid4()).encode()
+        yield b'"}'
+
+    response = client.post(
+        "/callbacks/some-token", content=chunks(),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"] == "unknown_callback"
+
+
 def test_expired_callback(client, monkeypatch):
     async def fake_post(_self, url, **kwargs):
         return httpx.Response(
