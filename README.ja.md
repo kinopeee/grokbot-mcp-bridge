@@ -52,6 +52,7 @@ sequenceDiagram
 | 値 | どこで取得するか | どこに入れるか |
 |---|---|---|
 | `INBOUND_WEBHOOK_SECRET` | 自分で生成（任意） | Fly secret（手順 2）、`POST /hooks/grokbot` を使う場合は Grok Bot 側のプッシュルーチンにも |
+| `CALLBACK_ALLOWED_HOSTS` | 受信 `callback_url` の宛先を許可するホスト名（カンマ区切り。例: `callback.example.com`） | Fly secret（手順 2）。プッシュ配信のみ |
 
 `POST /hooks/grokbot`（`list_grokbot_events`）によるプッシュ配信だけに必要。`ask_grokbot` には不要。
 
@@ -82,6 +83,7 @@ flyctl deploy --remote-only --ha=false -a <app>
 
 - `MCP_API_KEY` と `INBOUND_WEBHOOK_SECRET` は Poke や Cursor から発行されるものでは**なく**、自分で生成する値。`echo "$MCP_API_KEY"` で同じシェル内で確認できる（手順 3 で Poke に同じ値を入れる。Fly はシークレットの値を再表示しない）。
 - `INBOUND_WEBHOOK_SECRET` は任意。未設定でも `ask_grokbot` は動くが、`POST /hooks/grokbot` が 503 になり、`bridge_status` の `inbound_webhook_secret_configured` が `false` になる。
+- `POST /hooks/grokbot` のプッシュ配信では `CALLBACK_ALLOWED_HOSTS` も必要（例: `CALLBACK_ALLOWED_HOSTS=callback.example.com`）。受信した `callback_url` はリスト内ホストにのみ POST され、未設定ならすべて拒否される。
 
 ### 3. Poke を接続する
 

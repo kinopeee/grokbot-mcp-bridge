@@ -112,6 +112,9 @@ def test_inbound_delivers_callback(client, monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
     async def forward_post(_self, url, **kwargs):
+        # The handler must dial the DNS-pinned address with the original Host header.
+        assert urlparse(url).hostname == "93.184.216.34"
+        assert kwargs["headers"]["Host"] == "example.com"
         request = urllib.request.Request(
             local_url,
             data=json.dumps(kwargs["json"]).encode(),
