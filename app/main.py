@@ -695,9 +695,9 @@ async def _read_limited_body(request: Request) -> bytes | JSONResponse:
     body = bytearray()
     try:
         async for chunk in request.stream():
-            body += chunk
-            if len(body) > MAX_CALLBACK_BODY:
+            if len(body) + len(chunk) > MAX_CALLBACK_BODY:
                 return JSONResponse({"error": "body_too_large"}, status_code=413)
+            body += chunk
     except ClientDisconnect:
         return JSONResponse({"error": "client_disconnected"}, status_code=400)
     return bytes(body)
