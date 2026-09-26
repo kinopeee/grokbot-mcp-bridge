@@ -302,9 +302,11 @@ def _inspect_callback_url(url: str) -> tuple[bool, str, list[str]]:
             port = parsed.port
         except ValueError:
             return False, "invalid_port", []
-        if not CALLBACK_ALLOW_HTTP and port not in (None, 80, 443):
+        if port not in (None, 80, 443):
             return False, "port_not_allowed", []
-        if CALLBACK_ALLOWED_HOSTS and not any(
+        if not CALLBACK_ALLOWED_HOSTS:
+            return False, "allowed_hosts_not_configured", []
+        if not any(
             _host_matches(hostname, allowed) for allowed in CALLBACK_ALLOWED_HOSTS
         ):
             return False, "host_not_allowed", []
@@ -322,19 +324,18 @@ def _inspect_callback_url(url: str) -> tuple[bool, str, list[str]]:
             ipaddress.ip_address(info[4][0])
             for info in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         ]
-        if not CALLBACK_ALLOW_HTTP:
-            for address in addresses:
-                mapped = getattr(address, "ipv4_mapped", None)
-                checked = mapped or address
-                if (
-                    checked.is_private
-                    or checked.is_loopback
-                    or checked.is_link_local
-                    or checked.is_multicast
-                    or checked.is_reserved
-                    or checked.is_unspecified
-                ):
-                    return False, "private_address_not_allowed", []
+        for address in addresses:
+            mapped = getattr(address, "ipv4_mapped", None)
+            checked = mapped or address
+            if (
+                checked.is_private
+                or checked.is_loopback
+                or checked.is_link_local
+                or checked.is_multicast
+                or checked.is_reserved
+                or checked.is_unspecified
+            ):
+                return False, "private_address_not_allowed", []
         return True, "ok", [str(address) for address in addresses]
     except (OSError, ValueError):
         return False, "dns_resolution_failed", []
