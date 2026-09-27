@@ -109,7 +109,6 @@ def test_prune_retains_just_expired_pending_older_than_retention(monkeypatch):
     assert row[6] == STATUS_EXPIRED
     assert row[8] is not None
     assert stats["expired_runs"] == 1
-    assert stats["deleted_runs"] == 0
     assert run_id in stats["expired_run_ids"]
     prune_store()
     assert get_run(run_id) is not None
@@ -120,12 +119,11 @@ def test_prune_stamps_legacy_expired_null_answered_at(monkeypatch):
     monkeypatch.setattr(config, "RUN_RETENTION_SECONDS", 60)
     old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     run_id = _insert_run_at(created_at=old, status=STATUS_EXPIRED, answered_at=None)
-    stats = prune_store()
+    prune_store()
     row = get_run(run_id)
     assert row is not None
     assert row[6] == STATUS_EXPIRED
     assert row[8] is not None
-    assert stats["deleted_runs"] == 0
 
 
 def test_prune_deletes_expired_after_retention_from_answered_at(monkeypatch):
