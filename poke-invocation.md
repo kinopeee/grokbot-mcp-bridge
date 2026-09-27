@@ -196,7 +196,7 @@ Otherwise, POST without a Bearer token. Never forward the incoming webhook's `Au
 1. Register `https://<app>.fly.dev/mcp` (or `/sse`) as an MCP server in Poke
 2. `ask_grokbot` issues a UUID4 per call and puts it in both `run_id` and `request_id` in the payload POSTed to the Grok Bot webhook (caller-supplied values are overwritten)
 3. If the caller does not supply them, the bridge auto-attaches `callback_url` / `reply_url` / `response_url` (the token-scoped `/callbacks/{token}`)
-4. After receiving the callback, resolve the wait for that UUID and return the text to Poke as the MCP `tools/call` result (if it does not arrive within `wait_seconds`, `pending` is returned; collect it with `wait_for_grokbot_answer`, or stop with `cancel_run`)
+4. After receiving the callback, resolve the wait for that UUID and return the text to Poke as the MCP `tools/call` result (if it does not arrive within `wait_seconds` and the run is still pending, `pending` is returned; collect it with `wait_for_grokbot_answer`, or stop with `cancel_run`. `wait_seconds=0` still reads persisted status, so `CALLBACK_TTL_SECONDS=0` yields `expired`)
 
 What Poke actually sends (`tools/call`):
 

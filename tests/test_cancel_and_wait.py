@@ -154,3 +154,20 @@ def test_get_run_echoes_answer_status(monkeypatch):
     assert record["status"] == STATUS_PENDING
     assert record["answer_status"] == STATUS_PENDING
     assert "wait_for_grokbot_answer" in record["summary"]
+
+
+def test_ask_zero_wait_with_ttl_zero_reports_expired(monkeypatch):
+    monkeypatch.setattr(main.httpx.AsyncClient, "post", _fake_ok_post)
+    monkeypatch.setattr(config, "CALLBACK_TTL_SECONDS", 0)
+    result = json.loads(asyncio.run(
+        main.ask_grokbot({"prompt": "ttl0"}, wait_seconds=0)
+    ))
+    assert result["answer_status"] == STATUS_EXPIRED
+    assert "expired" in result["summary"]
+    record = json.loads(asyncio.run(main.get_grokbot_run(result["run_id"])))
+    assert record["status"] == STATUS_EXPIRED
+    assert record["answer_status"] == STATUS_EXPIRED
+    listed = json.loads(main.list_grokbot_runs(20))
+    match = next(item for item in listed if item["run_id"] == result["run_id"])
+    assert match["status"] == STATUS_EXPIRED
+    assert match["answer_status"] == STATUS_EXPIRED

@@ -196,7 +196,7 @@ Content-Type: application/json
 1. Poke から MCP として `https://<app>.fly.dev/mcp`（または `/sse`）を登録
 2. `ask_grokbot` が呼び出しごとに UUID4 を発行し、`run_id` / `request_id` の両方に載せて Grok Bot Webhook へ POST する（呼び出し側の指定は上書き）
 3. `callback_url` / `reply_url` / `response_url` は、呼び出し側が指定しなければブリッジが自動付与する（トークン付き `/callbacks/{token}`）
-4. コールバック受信後、その UUID の待ちを解決し、MCP `tools/call` 結果として Poke に本文を返す（`wait_seconds` 内に届かなければ `pending` を返すので、`wait_for_grokbot_answer` で回収するか `cancel_run` で止める）
+4. コールバック受信後、その UUID の待ちを解決し、MCP `tools/call` 結果として Poke に本文を返す（`wait_seconds` 内に届かずまだ pending なら `pending` を返すので、`wait_for_grokbot_answer` で回収するか `cancel_run` で止める。`wait_seconds=0` でも永続化した status を読むため、`CALLBACK_TTL_SECONDS=0` なら `expired`）
 
 Poke が実際に送るもの（`tools/call`）:
 

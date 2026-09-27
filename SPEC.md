@@ -20,7 +20,7 @@ Poke ◀──(MCP response)── Bridge ◀──(POST callback_url)───�
 | Tool | Purpose |
 |---|---|
 | `bridge_status` | Check configuration status (reports only whether secrets are set, never their values) |
-| `ask_grokbot(payload, wait_seconds=60)` | Send a request to Grok Bot. Waits for the callback for 60 seconds by default (max `MAX_WAIT_SECONDS`, default 180, hard cap 300) and returns `answer_text` plus `answer_status` (`pending` / `answered` / `cancelled` / `expired`). `wait_seconds=0` returns immediately. Rate-limited (`RATE_LIMIT_PER_MINUTE`) |
+| `ask_grokbot(payload, wait_seconds=60)` | Send a request to Grok Bot. Waits for the callback for 60 seconds by default (max `MAX_WAIT_SECONDS`, default 180, hard cap 300) and returns `answer_text` plus `answer_status` (`pending` / `answered` / `cancelled` / `expired`). `wait_seconds=0` returns immediately after reading the persisted status (lazy expire). Rate-limited (`RATE_LIMIT_PER_MINUTE`) |
 | `get_grokbot_run(run_id)` | Fetch a run by UUID (raw `answer`, `answer_text`, and `status` / `answer_status`) |
 | `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | Wait for the callback (or cancel/expiry) of a run (max `MAX_WAIT_SECONDS`). Returns the same `status` / `answer_status` values |
 | `cancel_run(run_id)` | Cancel a pending run so waiters unblock with `answer_status=cancelled`. Duplicate cancel is idempotent; already answered/expired returns an error. Rate-limited |
@@ -92,7 +92,7 @@ When the answer is ready, Grok Bot POSTs to the `callback_url` it received:
 | `cancelled` | The run was cancelled. Do not wait; start a new `ask_grokbot` if needed |
 | `expired` | The pending run exceeded `CALLBACK_TTL_SECONDS`. Start a new `ask_grokbot` |
 
-If no answer arrives within `wait_seconds`, the bridge returns `answer_status: "pending"` with a summary that names `wait_for_grokbot_answer` and `cancel_run`. Poke should then call `wait_for_grokbot_answer` (timeout also capped; no unbounded wait). Write tools may instead return `"error": "rate_limited"` with `retry_after_seconds`.
+If no answer arrives within `wait_seconds` and the run is still pending, the bridge returns `answer_status: "pending"` with a summary that names `wait_for_grokbot_answer` and `cancel_run`. `wait_seconds=0` still reads the persisted status (lazy expire), so `CALLBACK_TTL_SECONDS=0` returns `expired` rather than `pending`. Poke should then call `wait_for_grokbot_answer` (timeout also capped; no unbounded wait). Write tools may instead return `"error": "rate_limited"` with `retry_after_seconds`.
 
 ## 6. Inbound webhook (Grok Bot → bridge, push delivery)
 
@@ -113,8 +113,8 @@ If no answer arrives within `wait_seconds`, the bridge returns `answer_status: "
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Required on Fly (DNS-rebinding protection and default for `PUBLIC_BASE_URL`) |
 | `DB_PATH` | `/data/bridge.db` | Defaults to `/data/bridge.db` in the image (Dockerfile `ENV`) and can be overridden; on Fly it points at volume `bridge_data` |
 | `CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames the inbound `callback_url` may target | Optional, but unset → every inbound `callback_url` is rejected (fail closed) |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional. `CALLBACK_TTL_SECONDS` (default 3600) expires pending runs; they are never deleted while still pending within this TTL. `0` expires immediately (any positive age). `get_grokbot_run` / `list_grokbot_runs` lazy-expire stale pending rows so status matches wait/cancel |
-| `RUN_RETENTION_SECONDS` | — | Optional. Delete answered / cancelled / expired runs older than this (default 604800 = 7 days). `0` disables time-based run deletion (unlike `CALLBACK_TTL_SECONDS=0`) |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional. `CALLBACK_TTL_SECONDS` (default 3600) expires pending runs; they are never deleted while still pending within this TTL. `0` expires immediately, including a newly created pending run. `get_grokbot_run` / `list_grokbot_runs` lazy-expire stale pending rows so status matches wait/cancel |
+| `RUN_RETENTION_SECONDS` | — | Optional. Delete answered / cancelled / expired runs older than this (default 604800 = 7 days), measured from `answered_at` (answer / cancel / expire time), not `created_at`. Expire stamps `answered_at` so a just-expired run is kept for a full retention window. Legacy terminal rows with a NULL `answered_at` are stamped on first prune (grace from then). `0` disables time-based run deletion (unlike `CALLBACK_TTL_SECONDS=0`) |
 | `EVENT_RETENTION_SECONDS` | — | Optional. Delete inbound events older than this (default 604800). `0` disables |
 | `CLEANUP_INTERVAL_SECONDS` | — | Optional. Periodic SQLite cleanup interval (default 300). `0` = run at startup only |
 | `RATE_LIMIT_PER_MINUTE` | — | Optional. Per-API-key limit for `ask_grokbot` and `cancel_run` only (default 30). `0` disables. `tools/list` and other reads are not counted. Over limit → tool JSON `{"error":"rate_limited"}`. In-process calls without a request key share one local bucket. The limiter and waiters are in-memory and single-process (Fly `ha=false`) |

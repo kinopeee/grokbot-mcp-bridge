@@ -69,6 +69,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at)"
     )
+    conn.execute(
+        "UPDATE runs SET answered_at = ? WHERE answered_at IS NULL"
+        " AND status IN (?, ?, ?)",
+        (utc_now_iso(), STATUS_ANSWERED, STATUS_CANCELLED, STATUS_EXPIRED),
+    )
+    conn.commit()
 
 
 def json_value(value: str | None) -> Any:
@@ -110,11 +116,15 @@ def _select_run_row(conn: sqlite3.Connection, run_id: str) -> tuple[Any, ...] | 
     ).fetchone()
 
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def cas_expire(conn: sqlite3.Connection, run_id: str) -> bool:
-    """Transition pending → expired. Returns True only if this call won the CAS."""
+    """Transition pending → expired and stamp answered_at (terminal time)."""
     cur = conn.execute(
-        "UPDATE runs SET status = ? WHERE run_id = ? AND status = ?",
-        (STATUS_EXPIRED, run_id, STATUS_PENDING),
+        "UPDATE runs SET status = ?, answered_at = ? WHERE run_id = ? AND status = ?",
+        (STATUS_EXPIRED, utc_now_iso(), run_id, STATUS_PENDING),
     )
     return bool(cur.rowcount)
 
@@ -159,6 +169,8 @@ def get_run(run_id: str) -> tuple[Any, ...] | None:
 
 def is_created_expired(created_at: str, ttl_seconds: int | None = None) -> bool:
     ttl = config.CALLBACK_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+    if ttl <= 0:
+        return True
     try:
         created = datetime.fromisoformat(created_at)
         return (datetime.now(timezone.utc) - created).total_seconds() > ttl
@@ -177,14 +189,11 @@ def run_answer(run_id: str) -> tuple[str, Any] | None:
             return None
         status, answer_json, created_at = row
         if status == STATUS_PENDING and is_created_expired(created_at):
-            cur = conn.execute(
-                "UPDATE runs SET status = ? WHERE run_id = ? AND status = ?",
-                (STATUS_EXPIRED, run_id, STATUS_PENDING),
-            )
-            conn.commit()
-            if cur.rowcount:
+            if cas_expire(conn, run_id):
+                conn.commit()
                 status = STATUS_EXPIRED
             else:
+                conn.commit()
                 refreshed = conn.execute(
                     "SELECT status, answer_json FROM runs WHERE run_id = ?",
                     (run_id,),
@@ -458,9 +467,13 @@ def prune_store(
         deleted_runs = 0
         deleted_events = 0
         if run_keep > 0:
+            conn.execute(
+                "UPDATE runs SET answered_at = ? WHERE answered_at IS NULL"
+                " AND status IN (?, ?, ?)",
+                (moment.isoformat(), *TERMINAL_RUN_STATUSES),
+            )
             deleted_runs = conn.execute(
-                "DELETE FROM runs WHERE status IN (?, ?, ?)"
-                " AND COALESCE(answered_at, created_at) < ?",
+                "DELETE FROM runs WHERE status IN (?, ?, ?) AND answered_at < ?",
                 (*TERMINAL_RUN_STATUSES, run_cutoff),
             ).rowcount
         if event_keep > 0:

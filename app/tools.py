@@ -41,6 +41,22 @@ from app.rate_limit import check_write_limit, rate_limited_payload
 from app.waiters import acquire_waiter, notify_waiters, release_waiter
 
 
+async def _apply_persisted_status(result: dict[str, Any], run_id: str) -> None:
+    if result.get("answer_status") != STATUS_PENDING:
+        return
+    persisted = await asyncio.to_thread(run_answer, run_id)
+    if persisted and persisted[0] in TERMINAL_STATUSES:
+        answer_text = extract_answer_text(persisted[1])
+        result.update({
+            "answer": persisted[1],
+            "answer_text": answer_text,
+            "answer_status": persisted[0],
+            "summary": status_summary(run_id, persisted[0], answer_text=answer_text),
+        })
+        return
+    result["summary"] = status_summary(run_id, STATUS_PENDING)
+
+
 async def _wait_for_run(run_id: str, timeout: float) -> tuple[str, Any] | None:
     waiter = acquire_waiter(run_id)
     started = asyncio.get_running_loop().time()
@@ -127,8 +143,8 @@ async def ask_grokbot(
         result.update({
             "error": "bridge_not_configured",
             "detail": "CURSOR_WEBHOOK_URL or CURSOR_WEBHOOK_API_KEY is not set on the server.",
-            "summary": status_summary(correlation, STATUS_PENDING),
         })
+        await _apply_persisted_status(result, correlation)
         logger.info(
             "trigger returning run_id=%s answer_status=%s waited=%s",
             correlation, result["answer_status"], 0,
@@ -176,8 +192,7 @@ async def ask_grokbot(
                     correlation, answer[0], answer_text=answer_text
                 ),
             })
-    if result["answer_status"] == STATUS_PENDING:
-        result["summary"] = status_summary(correlation, STATUS_PENDING)
+    await _apply_persisted_status(result, correlation)
     logger.info(
         "trigger returning run_id=%s answer_status=%s waited=%s",
         correlation, result["answer_status"], round(waited, 3),
