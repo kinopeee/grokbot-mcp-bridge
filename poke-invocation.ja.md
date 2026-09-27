@@ -196,7 +196,7 @@ Content-Type: application/json
 1. Poke から MCP として `https://<app>.fly.dev/mcp`（または `/sse`）を登録
 2. `ask_grokbot` が呼び出しごとに UUID4 を発行し、`run_id` / `request_id` の両方に載せて Grok Bot Webhook へ POST する（呼び出し側の指定は上書き）
 3. `callback_url` / `reply_url` / `response_url` は、呼び出し側が指定しなければブリッジが自動付与する（トークン付き `/callbacks/{token}`）
-4. コールバック受信後、その UUID の待ちを解決し、MCP `tools/call` 結果として Poke に本文を返す（`wait_seconds` 内に届かなければ `pending` を返すので、`wait_for_grokbot_answer` で回収する）
+4. コールバック受信後、その UUID の待ちを解決し、MCP `tools/call` 結果として Poke に本文を返す（`wait_seconds` 内に届かなければ `pending` を返すので、`wait_for_grokbot_answer` で回収するか `cancel_run` で止める）
 
 Poke が実際に送るもの（`tools/call`）:
 
@@ -204,14 +204,16 @@ Poke が実際に送るもの（`tools/call`）:
 {"name": "ask_grokbot", "arguments": {"payload": {"message": "短く自己紹介してください。"}, "wait_seconds": 60}}
 ```
 
-`payload` は（`run_id` / `request_id` / コールバック URL を足したうえで）そのまま Grok Bot webhook に転送されるので、依頼文は `message` に入れる。`wait_seconds` は 0〜120 に丸められる。結果は JSON 文字列:
+`payload` は（`run_id` / `request_id` / コールバック URL を足したうえで）そのまま Grok Bot webhook に転送されるので、依頼文は `message` に入れる。`wait_seconds` は 0〜`MAX_WAIT_SECONDS`（既定 180、ハード上限 300）に丸められる。結果は JSON 文字列:
 
 | `answer_status` | Poke がすること |
 |---|---|
 | `answered` | `answer_text` を表示する |
-| `pending` | 返ってきた `run_id` で `wait_for_grokbot_answer` を呼ぶ（`timeout_seconds` は最大 120）。`summary` にもその旨が書かれる。`get_grokbot_run(run_id)` なら待たずに同じレコードを取れる |
+| `pending` | 返ってきた `run_id` で `wait_for_grokbot_answer` を呼ぶ（`timeout_seconds` は最大 `MAX_WAIT_SECONDS`）。`summary` にもその旨が書かれる。`get_grokbot_run(run_id)` なら待たずに同じ `status` / `answer_status` を取れる。止めるなら `cancel_run(run_id)` |
+| `cancelled` | 待たない。まだ答えが必要なら新しい `ask_grokbot` を始める |
+| `expired` | `CALLBACK_TTL_SECONDS` を超えた。新しい `ask_grokbot` を始める |
 
-`ask_grokbot` が `"error": "bridge_not_configured"` を返す場合はブリッジに `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` が無い。まず `bridge_status` で確認する。
+`ask_grokbot` が `"error": "bridge_not_configured"` を返す場合はブリッジに `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` が無い。まず `bridge_status` で確認する。`"error": "rate_limited"` なら `retry_after_seconds` 待って再試行する（`RATE_LIMIT_PER_MINUTE`、既定 30）。既に cancelled の run への `cancel_run` は冪等。answered / expired を cancel すると `already_answered` / `already_expired` になる。
 
 ### C. 疎通テストの進め方
 
@@ -229,6 +231,7 @@ Poke が実際に送るもの（`tools/call`）:
 | チャットには出るがコールバック失敗 | URL・認証・ボディ形 |
 | コールバック 200・UUID 一致なのに Poke に出ない | **ブリッジ → Poke**（ログ・MCP 転送／表示） |
 | コールバック 409 `already_answered` | その UUID は既回答。新しい Run で再試行 |
+| コールバック 409 `already_cancelled` | その UUID は `cancel_run` 済み。新しい Run を始める |
 | 応答が `run_id: 3` のような数値だけ | 受付番号。待ち UUID とは別物 |
 
 ブリッジ運用側で確認する3点:

@@ -107,7 +107,8 @@ Poke で MCP インテグレーションを追加し、次を入力する。
 2. Poke から `bridge_status` を呼ぶ → `webhook_url_configured` と `webhook_api_key_configured` が `true`（任意の秘密を飛ばした場合 `inbound_webhook_secret_configured` は `false` で問題ない）
 3. Poke から `ask_grokbot` を `payload={"message": "短く自己紹介してください。"}`、`wait_seconds=60` で呼ぶ
    - `answer_status: "answered"` → `answer_text` に回答が入る
-   - `answer_status: "pending"` → `wait_for_grokbot_answer(run_id, timeout_seconds=120)` を呼ぶ
+   - `answer_status: "pending"` → `wait_for_grokbot_answer(run_id, timeout_seconds=180)` を呼ぶ（止めるなら `cancel_run`）
+   - `answer_status: "cancelled"` / `"expired"` → 待たず、必要なら新しい `ask_grokbot` を始める
 
    応答例:
 
@@ -140,6 +141,7 @@ Grok Bot 側の契約（`run_id` のエコー、`callback_url` への POST）と
 - `ask_grokbot`
 - `get_grokbot_run`
 - `wait_for_grokbot_answer`
+- `cancel_run`
 - `list_grokbot_runs`
 - `list_grokbot_events`
 - `get_grokbot_event`
@@ -150,7 +152,10 @@ Grok Bot 側の契約（`run_id` のエコー、`callback_url` への POST）と
 
 `CURSOR_WEBHOOK_URL`, `CURSOR_WEBHOOK_API_KEY`, `MCP_API_KEY`,
 `INBOUND_WEBHOOK_SECRET`, `DB_PATH`, `ALLOWED_HOSTS`, `PUBLIC_BASE_URL`,
-`CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`
+`CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`,
+`RUN_RETENTION_SECONDS`, `EVENT_RETENTION_SECONDS`, `CLEANUP_INTERVAL_SECONDS`,
+`RATE_LIMIT_PER_MINUTE`, `MAX_WAIT_SECONDS`。既定値は [SPEC.ja.md](SPEC.ja.md) 7 章
+（キー名のみ。シークレットの値はドキュメントや `.env.example` に書かない）。
 
 ## コールバック契約
 

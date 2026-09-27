@@ -20,10 +20,11 @@ Poke ◀──(MCP response)── Bridge ◀──(POST callback_url)───�
 | Tool | Purpose |
 |---|---|
 | `bridge_status` | Check configuration status (reports only whether secrets are set, never their values) |
-| `ask_grokbot(payload, wait_seconds=45)` | Send a request to Grok Bot. Waits for the callback for 45 seconds by default (max 120) and returns `answer_text`. `wait_seconds=0` returns immediately |
-| `get_grokbot_run(run_id)` | Fetch a run by UUID (raw `answer` plus `answer_text`) |
-| `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | Wait for the callback of an unanswered run (max 120 seconds) |
-| `list_grokbot_runs(limit)` | List recent runs |
+| `ask_grokbot(payload, wait_seconds=60)` | Send a request to Grok Bot. Waits for the callback for 60 seconds by default (max `MAX_WAIT_SECONDS`, default 180, hard cap 300) and returns `answer_text` plus `answer_status` (`pending` / `answered` / `cancelled` / `expired`). `wait_seconds=0` returns immediately. Rate-limited (`RATE_LIMIT_PER_MINUTE`) |
+| `get_grokbot_run(run_id)` | Fetch a run by UUID (raw `answer`, `answer_text`, and `status` / `answer_status`) |
+| `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | Wait for the callback (or cancel/expiry) of a run (max `MAX_WAIT_SECONDS`). Returns the same `status` / `answer_status` values |
+| `cancel_run(run_id)` | Cancel a pending run so waiters unblock with `answer_status=cancelled`. Duplicate cancel is idempotent; already answered/expired returns an error. Rate-limited |
+| `list_grokbot_runs(limit)` | List recent runs (`status` and `answer_status` are the same value) |
 | `list_grokbot_events(limit)` / `get_grokbot_event(event_id)` | List inbound webhook events / fetch one in full |
 
 Resources: `grokbot://runs`, `grokbot://events`
@@ -66,7 +67,8 @@ When the answer is ready, Grok Bot POSTs to the `callback_url` it received:
 | No UUID | `400 {"error":"run_id_required"}` |
 | Token and UUID do not match | `400 {"error":"run_id_mismatch"}` |
 | Unknown token / unknown UUID | `404` |
-| Already answered (duplicate) | `409` |
+| Already answered (duplicate) | `409` `already_answered` |
+| Already cancelled | `409` `already_cancelled` |
 | Expired (default 3600 seconds) | `410` |
 
 ## 5. Example response as seen by Poke
@@ -81,8 +83,16 @@ When the answer is ready, Grok Bot POSTs to the `callback_url` it received:
 }
 ```
 
-If no answer arrives within 45 seconds, the bridge returns `answer_status: "pending"` with
-`"summary": "No answer yet from Grok Bot; call wait_for_grokbot_answer with run_id …"`, and Poke should then call `wait_for_grokbot_answer`.
+`answer_status` (also echoed as `status` on get/list/wait/cancel) is one of:
+
+| `answer_status` | Meaning |
+|---|---|
+| `pending` | No callback yet. Call `wait_for_grokbot_answer` with the `run_id`, or `cancel_run` to stop |
+| `answered` | Show `answer_text` |
+| `cancelled` | The run was cancelled. Do not wait; start a new `ask_grokbot` if needed |
+| `expired` | The pending run exceeded `CALLBACK_TTL_SECONDS`. Start a new `ask_grokbot` |
+
+If no answer arrives within `wait_seconds`, the bridge returns `answer_status: "pending"` with a summary that names `wait_for_grokbot_answer` and `cancel_run`. Poke should then call `wait_for_grokbot_answer` (timeout also capped; no unbounded wait). Write tools may instead return `"error": "rate_limited"` with `retry_after_seconds`.
 
 ## 6. Inbound webhook (Grok Bot → bridge, push delivery)
 
@@ -103,7 +113,12 @@ If no answer arrives within 45 seconds, the bridge returns `answer_status: "pend
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Required on Fly (DNS-rebinding protection and default for `PUBLIC_BASE_URL`) |
 | `DB_PATH` | `/data/bridge.db` | Defaults to `/data/bridge.db` in the image (Dockerfile `ENV`) and can be overridden; on Fly it points at volume `bridge_data` |
 | `CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames the inbound `callback_url` may target | Optional, but unset → every inbound `callback_url` is rejected (fail closed) |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional. `CALLBACK_TTL_SECONDS` (default 3600) expires pending runs; they are never deleted while still pending within this TTL |
+| `RUN_RETENTION_SECONDS` | — | Optional. Delete answered / cancelled / expired runs older than this (default 604800 = 7 days). `0` disables time-based run deletion |
+| `EVENT_RETENTION_SECONDS` | — | Optional. Delete inbound events older than this (default 604800). `0` disables |
+| `CLEANUP_INTERVAL_SECONDS` | — | Optional. Periodic SQLite cleanup interval (default 300). `0` = run at startup only |
+| `RATE_LIMIT_PER_MINUTE` | — | Optional. Per-API-key limit for MCP-authenticated POST and for `ask_grokbot` / `cancel_run` (default 30). `0` disables. Over limit → HTTP `429` and/or `{"error":"rate_limited"}` |
+| `MAX_WAIT_SECONDS` | — | Optional. Cap for `wait_seconds` / `timeout_seconds` (default 180, hard cap 300) |
 
 ## 8. Operations
 

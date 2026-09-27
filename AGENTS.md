@@ -25,5 +25,5 @@ uv run --extra dev pytest -q
 ## ドキュメント
 
 - `README` / `SPEC` / `poke-invocation` は英語版（`*.md`）と日本語版（`*.ja.md`）の対。片方を直したらもう片方も直す。
-- 仕様の正は `SPEC` と `app/main.py`。`poke-invocation` はそれに合わせる。
+- 仕様の正は `SPEC` と `app/`（エントリポイントは `app.main:app` / `app.main:main`）。`poke-invocation` はそれに合わせる。
 - 秘密（Webhook key / Bearer / Fly secrets の値）は書かない。

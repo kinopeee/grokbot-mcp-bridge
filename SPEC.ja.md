@@ -20,10 +20,11 @@ Poke ◀──(MCP 応答)────── ブリッジ ◀──(POST callbac
 | ツール | 用途 |
 |---|---|
 | `bridge_status` | 設定状態の確認（シークレットの有無のみ、値は返さない） |
-| `ask_grokbot(payload, wait_seconds=45)` | Grok Bot に問い合わせ。既定 45 秒（最大 120）コールバックを待って `answer_text` を返す。`wait_seconds=0` で即時返却 |
-| `get_grokbot_run(run_id)` | run を UUID で取得（`answer` 生データ + `answer_text`） |
-| `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | 未回答 run のコールバック到着を待つ（最大 120 秒） |
-| `list_grokbot_runs(limit)` | 最近の run 一覧 |
+| `ask_grokbot(payload, wait_seconds=60)` | Grok Bot に問い合わせ。既定 60 秒（最大は `MAX_WAIT_SECONDS`、既定 180、ハード上限 300）コールバックを待って `answer_text` と `answer_status`（`pending` / `answered` / `cancelled` / `expired`）を返す。`wait_seconds=0` で即時返却。レート制限あり（`RATE_LIMIT_PER_MINUTE`） |
+| `get_grokbot_run(run_id)` | run を UUID で取得（`answer` 生データ、`answer_text`、`status` / `answer_status`） |
+| `wait_for_grokbot_answer(run_id, timeout_seconds=60)` | run のコールバック（または cancel / 期限切れ）を待つ（最大 `MAX_WAIT_SECONDS`）。同じ `status` / `answer_status` を返す |
+| `cancel_run(run_id)` | pending の run をキャンセルし、待ち側を `answer_status=cancelled` で解除する。二重 cancel は冪等。既に answered / expired ならエラー。レート制限あり |
+| `list_grokbot_runs(limit)` | 最近の run 一覧（`status` と `answer_status` は同値） |
 | `list_grokbot_events(limit)` / `get_grokbot_event(event_id)` | 受信 webhook イベントの一覧 / 全文 |
 
 リソース: `grokbot://runs`, `grokbot://events`
@@ -66,7 +67,8 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 | UUID なし | `400 {"error":"run_id_required"}` |
 | token と UUID が不一致 | `400 {"error":"run_id_mismatch"}` |
 | 不明 token / 不明 UUID | `404` |
-| 既に回答済み（重複） | `409` |
+| 既に回答済み（重複） | `409` `already_answered` |
+| 既にキャンセル済み | `409` `already_cancelled` |
 | 期限切れ（既定 3600 秒） | `410` |
 
 ## 5. Poke 側から見た応答例
@@ -81,8 +83,16 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 }
 ```
 
-45 秒以内に届かなければ `answer_status: "pending"` と
-`"summary": "No answer yet from Grok Bot; call wait_for_grokbot_answer with run_id …"` を返すので、Poke は `wait_for_grokbot_answer` を呼ぶ。
+`answer_status`（get / list / wait / cancel では `status` としても同じ値を返す）は次のいずれか:
+
+| `answer_status` | 意味 |
+|---|---|
+| `pending` | まだコールバックなし。`run_id` で `wait_for_grokbot_answer` を呼ぶか、`cancel_run` で止める |
+| `answered` | `answer_text` を表示する |
+| `cancelled` | キャンセル済み。待たず、必要なら新しい `ask_grokbot` を始める |
+| `expired` | pending が `CALLBACK_TTL_SECONDS` を超えた。新しい `ask_grokbot` を始める |
+
+`wait_seconds` 以内に届かなければ `answer_status: "pending"` と、`wait_for_grokbot_answer` / `cancel_run` を案内する `summary` を返す。Poke は `wait_for_grokbot_answer` を呼ぶ（タイムアウトにも上限があり、無制限待ちにはしない）。書き込みツールは `"error": "rate_limited"` と `retry_after_seconds` を返すことがある。
 
 ## 6. 受信 webhook（Grok Bot → ブリッジ、能動配信）
 
@@ -103,7 +113,12 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Fly では必須（DNS rebinding 対策と `PUBLIC_BASE_URL` の既定値） |
 | `DB_PATH` | `/data/bridge.db` | イメージでは `/data/bridge.db` が既定（Dockerfile `ENV`）で上書き可能。Fly ではボリューム `bridge_data` を指す |
 | `CALLBACK_ALLOWED_HOSTS` | 受信 `callback_url` の宛先を許可するホスト名（カンマ区切り） | 任意。ただし未設定なら受信 `callback_url` はすべて拒否（フェイルクローズ） |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意 |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意。`CALLBACK_TTL_SECONDS`（既定 3600）で pending run を期限切れにする。TTL 内の pending は削除しない |
+| `RUN_RETENTION_SECONDS` | — | 任意。answered / cancelled / expired の run をこの秒数より古ければ削除（既定 604800 = 7 日）。`0` で時間ベースの run 削除を無効化 |
+| `EVENT_RETENTION_SECONDS` | — | 任意。この秒数より古い受信イベントを削除（既定 604800）。`0` で無効 |
+| `CLEANUP_INTERVAL_SECONDS` | — | 任意。SQLite 定期クリーンアップ間隔（既定 300）。`0` なら起動時のみ |
+| `RATE_LIMIT_PER_MINUTE` | — | 任意。MCP 認証済み POST と `ask_grokbot` / `cancel_run` の API キー単位上限（既定 30）。`0` で無効。超過時は HTTP `429` および/または `{"error":"rate_limited"}` |
+| `MAX_WAIT_SECONDS` | — | 任意。`wait_seconds` / `timeout_seconds` の上限（既定 180、ハード上限 300） |
 
 ## 8. 運用手順
 

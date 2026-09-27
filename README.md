@@ -107,7 +107,8 @@ Add an MCP integration in Poke with:
 2. From Poke, call `bridge_status` → `webhook_url_configured` and `webhook_api_key_configured` are `true` (`inbound_webhook_secret_configured` is `false` if you skipped the optional secret — that is fine)
 3. From Poke, call `ask_grokbot` with `payload={"message": "Introduce yourself briefly."}`, `wait_seconds=60`
    - `answer_status: "answered"` → `answer_text` holds the reply
-   - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id, timeout_seconds=120)`
+   - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id, timeout_seconds=180)` (or `cancel_run` to stop)
+   - `answer_status: "cancelled"` / `"expired"` → do not wait; start a new `ask_grokbot` if needed
 
    Sample result:
 
@@ -140,6 +141,7 @@ For the Grok Bot-side contract (echoing `run_id`, posting to `callback_url`) and
 - `ask_grokbot`
 - `get_grokbot_run`
 - `wait_for_grokbot_answer`
+- `cancel_run`
 - `list_grokbot_runs`
 - `list_grokbot_events`
 - `get_grokbot_event`
@@ -150,7 +152,10 @@ Resources are available at `grokbot://events` and `grokbot://runs`.
 
 `CURSOR_WEBHOOK_URL`, `CURSOR_WEBHOOK_API_KEY`, `MCP_API_KEY`,
 `INBOUND_WEBHOOK_SECRET`, `DB_PATH`, `ALLOWED_HOSTS`, `PUBLIC_BASE_URL`,
-`CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, and `CALLBACK_ALLOWED_HOSTS`.
+`CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `CALLBACK_ALLOWED_HOSTS`,
+`RUN_RETENTION_SECONDS`, `EVENT_RETENTION_SECONDS`, `CLEANUP_INTERVAL_SECONDS`,
+`RATE_LIMIT_PER_MINUTE`, and `MAX_WAIT_SECONDS`. See [SPEC.md](SPEC.md) §7
+for defaults (key names only; do not put secret values in docs or `.env.example`).
 
 ## Callback contract
 
