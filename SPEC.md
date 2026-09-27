@@ -113,11 +113,11 @@ If no answer arrives within `wait_seconds`, the bridge returns `answer_status: "
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Required on Fly (DNS-rebinding protection and default for `PUBLIC_BASE_URL`) |
 | `DB_PATH` | `/data/bridge.db` | Defaults to `/data/bridge.db` in the image (Dockerfile `ENV`) and can be overridden; on Fly it points at volume `bridge_data` |
 | `CALLBACK_ALLOWED_HOSTS` | Comma-separated hostnames the inbound `callback_url` may target | Optional, but unset → every inbound `callback_url` is rejected (fail closed) |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional. `CALLBACK_TTL_SECONDS` (default 3600) expires pending runs; they are never deleted while still pending within this TTL |
-| `RUN_RETENTION_SECONDS` | — | Optional. Delete answered / cancelled / expired runs older than this (default 604800 = 7 days). `0` disables time-based run deletion |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | Optional. `CALLBACK_TTL_SECONDS` (default 3600) expires pending runs; they are never deleted while still pending within this TTL. `0` expires immediately (any positive age). `get_grokbot_run` / `list_grokbot_runs` lazy-expire stale pending rows so status matches wait/cancel |
+| `RUN_RETENTION_SECONDS` | — | Optional. Delete answered / cancelled / expired runs older than this (default 604800 = 7 days). `0` disables time-based run deletion (unlike `CALLBACK_TTL_SECONDS=0`) |
 | `EVENT_RETENTION_SECONDS` | — | Optional. Delete inbound events older than this (default 604800). `0` disables |
 | `CLEANUP_INTERVAL_SECONDS` | — | Optional. Periodic SQLite cleanup interval (default 300). `0` = run at startup only |
-| `RATE_LIMIT_PER_MINUTE` | — | Optional. Per-API-key limit for MCP-authenticated POST and for `ask_grokbot` / `cancel_run` (default 30). `0` disables. Over limit → HTTP `429` and/or `{"error":"rate_limited"}` |
+| `RATE_LIMIT_PER_MINUTE` | — | Optional. Per-API-key limit for `ask_grokbot` and `cancel_run` only (default 30). `0` disables. `tools/list` and other reads are not counted. Over limit → tool JSON `{"error":"rate_limited"}`. In-process calls without a request key share one local bucket. The limiter and waiters are in-memory and single-process (Fly `ha=false`) |
 | `MAX_WAIT_SECONDS` | — | Optional. Cap for `wait_seconds` / `timeout_seconds` (default 180, hard cap 300) |
 
 ## 8. Operations

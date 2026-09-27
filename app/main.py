@@ -34,7 +34,7 @@ from app.db import (
 )
 from app.logging_util import RedactCallbackTokenFilter, install_access_log_redaction
 from app.mcp_app import HAS_MCP, build_mcp_apps, mcp
-from app.retention import cleanup_loop, run_cleanup
+from app.retention import cleanup_loop, cleanup_once
 from app.routes import read_limited_body as _read_limited_body, register_routes
 from app.ssrf import host_matches as _host_matches
 from app.ssrf import inspect_callback_url as _inspect_callback_url
@@ -85,7 +85,7 @@ def _resolve_callback(body: dict, token: str) -> JSONResponse | dict:
 @contextlib.asynccontextmanager
 async def lifespan(application: FastAPI):
     cleanup_task = None
-    await asyncio.to_thread(run_cleanup)
+    await cleanup_once()
     if config.CLEANUP_INTERVAL_SECONDS > 0:
         cleanup_task = asyncio.create_task(cleanup_loop())
     try:

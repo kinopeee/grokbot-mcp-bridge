@@ -195,6 +195,8 @@ async def get_grokbot_run(run_id: str) -> str:
     if not row:
         return json.dumps({"error": "not_found", "run_id": run_id})
     record = run_record(row)
+    if record["answer_status"] == STATUS_EXPIRED:
+        notify_waiters(run_id)
     record["summary"] = status_summary(
         run_id, record["answer_status"], answer_text=record.get("answer_text")
     )
@@ -285,7 +287,7 @@ def list_grokbot_runs(limit: int = 20) -> str:
     """
     limit = max(1, min(int(limit), 100))
     rows = list_runs(limit)
-    return json.dumps([
+    payload = [
         {
             "run_id": row[0],
             "created_at": row[1],
@@ -295,7 +297,11 @@ def list_grokbot_runs(limit: int = 20) -> str:
             "upstream_status": row[4],
         }
         for row in rows
-    ])
+    ]
+    for item in payload:
+        if item["answer_status"] == STATUS_EXPIRED:
+            notify_waiters(item["run_id"])
+    return json.dumps(payload)
 
 
 @tool(structured_output=False)

@@ -107,7 +107,7 @@ Poke で MCP インテグレーションを追加し、次を入力する。
 2. Poke から `bridge_status` を呼ぶ → `webhook_url_configured` と `webhook_api_key_configured` が `true`（任意の秘密を飛ばした場合 `inbound_webhook_secret_configured` は `false` で問題ない）
 3. Poke から `ask_grokbot` を `payload={"message": "短く自己紹介してください。"}`、`wait_seconds=60` で呼ぶ
    - `answer_status: "answered"` → `answer_text` に回答が入る
-   - `answer_status: "pending"` → `wait_for_grokbot_answer(run_id, timeout_seconds=180)` を呼ぶ（止めるなら `cancel_run`）
+   - `answer_status: "pending"` → `wait_for_grokbot_answer(run_id)` を呼ぶ（既定 60 秒、上限 `MAX_WAIT_SECONDS`）。止めるなら `cancel_run`
    - `answer_status: "cancelled"` / `"expired"` → 待たず、必要なら新しい `ask_grokbot` を始める
 
    応答例:

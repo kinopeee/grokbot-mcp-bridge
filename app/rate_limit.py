@@ -1,7 +1,8 @@
-"""In-process sliding-window rate limiter (per API-key hash or global)."""
+"""In-process sliding-window rate limiter (per API-key hash or local)."""
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import threading
 import time
@@ -10,6 +11,10 @@ from collections import deque
 from app import config
 
 WINDOW_SECONDS = 60.0
+LOCAL_KEY = "local"
+current_limit_key: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "rate_limit_key", default=LOCAL_KEY
+)
 
 
 class SlidingWindowLimiter:
@@ -38,15 +43,18 @@ class SlidingWindowLimiter:
 
 
 limiter = SlidingWindowLimiter()
-LOCAL_KEY = "local"
 
 
 def hash_presented_key(presented: str) -> str:
     return hashlib.sha256(presented.encode("utf-8")).hexdigest()
 
 
+def bind_request_key(presented: str) -> None:
+    current_limit_key.set(hash_presented_key(presented))
+
+
 def check_write_limit(key: str | None = None) -> tuple[bool, int]:
-    return limiter.allow(key or LOCAL_KEY, config.RATE_LIMIT_PER_MINUTE)
+    return limiter.allow(key or current_limit_key.get(), config.RATE_LIMIT_PER_MINUTE)
 
 
 def rate_limited_payload(retry_after_seconds: int) -> dict[str, object]:

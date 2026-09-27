@@ -9,7 +9,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app import config
-from app.answers import STATUS_CANCELLED, STATUS_EXPIRED, STATUS_PENDING, extract_answer_text
+from app.answers import (
+    STATUS_ANSWERED,
+    STATUS_CANCELLED,
+    STATUS_EXPIRED,
+    STATUS_PENDING,
+    extract_answer_text,
+)
 
 _schema_ready: set[str] = set()
 
@@ -96,14 +102,57 @@ def run_record(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
+def _select_run_row(conn: sqlite3.Connection, run_id: str) -> tuple[Any, ...] | None:
+    return conn.execute(
+        "SELECT run_id, created_at, payload_json, upstream_status, upstream_response,"
+        " run_uuid, status, answer_json, answered_at, token FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+
+
+def cas_expire(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Transition pending → expired. Returns True only if this call won the CAS."""
+    cur = conn.execute(
+        "UPDATE runs SET status = ? WHERE run_id = ? AND status = ?",
+        (STATUS_EXPIRED, run_id, STATUS_PENDING),
+    )
+    return bool(cur.rowcount)
+
+
+def expire_stale_pending(
+    conn: sqlite3.Connection, ttl_seconds: int | None = None
+) -> list[str]:
+    """Expire pending rows past TTL. Never touches cancelled/answered."""
+    expired_ids: list[str] = []
+    pending_rows = conn.execute(
+        "SELECT run_id, created_at FROM runs WHERE status = ?",
+        (STATUS_PENDING,),
+    ).fetchall()
+    for run_id, created_at in pending_rows:
+        if is_created_expired(created_at, ttl_seconds) and cas_expire(conn, run_id):
+            expired_ids.append(run_id)
+    return expired_ids
+
+
+def callback_error_for_status(status: str) -> dict[str, Any]:
+    if status == STATUS_ANSWERED:
+        return {"error": "already_answered", "http_status": 409}
+    if status == STATUS_CANCELLED:
+        return {"error": "already_cancelled", "http_status": 409}
+    return {"error": "callback_expired", "http_status": 410}
+
+
 def get_run(run_id: str) -> tuple[Any, ...] | None:
     conn = db()
     try:
-        return conn.execute(
-            "SELECT run_id, created_at, payload_json, upstream_status, upstream_response,"
-            " run_uuid, status, answer_json, answered_at, token FROM runs WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
+        row = _select_run_row(conn, run_id)
+        if not row:
+            return None
+        if row[6] == STATUS_PENDING and is_created_expired(row[1]):
+            cas_expire(conn, run_id)
+            conn.commit()
+            row = _select_run_row(conn, run_id)
+        return row
     finally:
         conn.close()
 
@@ -192,16 +241,20 @@ def cancel_pending_run(run_id: str) -> tuple[str, str | None]:
             return "not_found", None
         status, created_at = row
         if status == STATUS_PENDING and is_created_expired(created_at):
-            conn.execute(
-                "UPDATE runs SET status = ? WHERE run_id = ? AND status = ?",
-                (STATUS_EXPIRED, run_id, STATUS_PENDING),
-            )
+            won = cas_expire(conn, run_id)
             conn.commit()
-            status = STATUS_EXPIRED
+            if won:
+                return "already_expired", STATUS_EXPIRED
+            again = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if not again:
+                return "not_found", None
+            status = again[0]
         if status == STATUS_CANCELLED:
             return "already_cancelled", STATUS_CANCELLED
-        if status == "answered":
-            return "already_answered", "answered"
+        if status == STATUS_ANSWERED:
+            return "already_answered", STATUS_ANSWERED
         if status == STATUS_EXPIRED:
             return "already_expired", STATUS_EXPIRED
         cur = conn.execute(
@@ -218,8 +271,8 @@ def cancel_pending_run(run_id: str) -> tuple[str, str | None]:
             current = again[0]
             if current == STATUS_CANCELLED:
                 return "already_cancelled", STATUS_CANCELLED
-            if current == "answered":
-                return "already_answered", "answered"
+            if current == STATUS_ANSWERED:
+                return "already_answered", STATUS_ANSWERED
             return "already_expired", STATUS_EXPIRED
         return "cancelled", STATUS_CANCELLED
     finally:
@@ -274,6 +327,8 @@ def count_events() -> int:
 def list_runs(limit: int) -> list[tuple[Any, ...]]:
     conn = db()
     try:
+        expire_stale_pending(conn)
+        conn.commit()
         return conn.execute(
             "SELECT run_id, created_at, run_uuid, status, upstream_status FROM runs"
             " ORDER BY id DESC LIMIT ?",
@@ -323,18 +378,21 @@ def resolve_callback(body: dict[str, Any], token: str) -> dict[str, Any]:
             str(row[1] or "").encode("utf-8"), echo.encode("utf-8")
         ):
             return {"error": "run_id_mismatch", "http_status": 400}
-        if row[3] == "answered":
-            return {"error": "already_answered", "http_status": 409}
+        if row[3] == STATUS_ANSWERED:
+            return callback_error_for_status(STATUS_ANSWERED)
         if row[3] == STATUS_CANCELLED:
-            return {"error": "already_cancelled", "http_status": 409}
-        expired = row[3] == STATUS_EXPIRED or is_created_expired(row[2])
-        if expired:
-            conn.execute(
-                "UPDATE runs SET status = ? WHERE run_id = ?",
-                (STATUS_EXPIRED, row[1]),
-            )
+            return callback_error_for_status(STATUS_CANCELLED)
+        if row[3] == STATUS_EXPIRED or is_created_expired(row[2]):
+            if row[3] == STATUS_EXPIRED:
+                return callback_error_for_status(STATUS_EXPIRED)
+            won = cas_expire(conn, row[1])
             conn.commit()
-            return {"error": "callback_expired", "http_status": 410}
+            if won:
+                return callback_error_for_status(STATUS_EXPIRED)
+            status = conn.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (row[1],)
+            ).fetchone()
+            return callback_error_for_status(status[0] if status else STATUS_EXPIRED)
         cur = conn.execute(
             "UPDATE runs SET status = 'answered', answer_json = ?, answered_at = ?"
             " WHERE run_id = ? AND status = ?",
@@ -350,11 +408,7 @@ def resolve_callback(body: dict[str, Any], token: str) -> dict[str, Any]:
             status = conn.execute(
                 "SELECT status FROM runs WHERE run_id = ?", (row[1],)
             ).fetchone()
-            if status and status[0] == "answered":
-                return {"error": "already_answered", "http_status": 409}
-            if status and status[0] == STATUS_CANCELLED:
-                return {"error": "already_cancelled", "http_status": 409}
-            return {"error": "callback_expired", "http_status": 410}
+            return callback_error_for_status(status[0] if status else STATUS_EXPIRED)
     finally:
         conn.close()
     return {"ok": True, "run_id": row[1], "http_status": 200}
@@ -398,21 +452,9 @@ def prune_store(
     expire_before = (moment - timedelta(seconds=ttl)).isoformat()
     run_cutoff = (moment - timedelta(seconds=run_keep)).isoformat()
     event_cutoff = (moment - timedelta(seconds=event_keep)).isoformat()
-    expired_ids: list[str] = []
     conn = db()
     try:
-        pending_rows = conn.execute(
-            "SELECT run_id, created_at FROM runs WHERE status = ?",
-            (STATUS_PENDING,),
-        ).fetchall()
-        for run_id, created_at in pending_rows:
-            if is_created_expired(created_at, ttl):
-                cur = conn.execute(
-                    "UPDATE runs SET status = ? WHERE run_id = ? AND status = ?",
-                    (STATUS_EXPIRED, run_id, STATUS_PENDING),
-                )
-                if cur.rowcount:
-                    expired_ids.append(run_id)
+        expired_ids = expire_stale_pending(conn, ttl)
         deleted_runs = 0
         deleted_events = 0
         if run_keep > 0:

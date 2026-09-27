@@ -10,10 +10,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app import config
-from app.rate_limit import check_write_limit, hash_presented_key, rate_limited_payload
+from app.rate_limit import bind_request_key
 
 PROTECTED_PREFIXES = ("/mcp", "/sse", "/messages")
-WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def is_protected_path(path: str) -> bool:
@@ -41,15 +40,7 @@ async def require_mcp_auth(request: Request, call_next):
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        if request.method in WRITE_METHODS:
-            allowed, retry_after = check_write_limit(hash_presented_key(presented))
-            if not allowed:
-                payload = rate_limited_payload(retry_after)
-                return JSONResponse(
-                    payload,
-                    status_code=429,
-                    headers={"Retry-After": str(retry_after)},
-                )
+        bind_request_key(presented)
     return await call_next(request)
 
 

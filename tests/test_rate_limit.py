@@ -1,4 +1,4 @@
-"""Rate limiting for write tools and MCP-authenticated POST paths."""
+"""Rate limiting for write tools (per API-key hash, not tools/list)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import httpx
 
 from app import config, main
-from app.rate_limit import limiter
+from app.rate_limit import LOCAL_KEY, bind_request_key, current_limit_key, limiter
 
 
 def test_ask_grokbot_rate_limited(monkeypatch):
@@ -42,7 +42,7 @@ def test_cancel_run_rate_limited(monkeypatch):
     limiter.reset()
 
 
-def test_mcp_post_returns_429(client, monkeypatch):
+def test_tools_list_is_not_rate_limited(client, monkeypatch):
     limiter.reset()
     monkeypatch.setattr(config, "RATE_LIMIT_PER_MINUTE", 1)
     headers = {
@@ -54,7 +54,20 @@ def test_mcp_post_returns_429(client, monkeypatch):
     first = client.post("/mcp", headers=headers, json=body)
     second = client.post("/mcp", headers=headers, json=body)
     assert first.status_code == 200
-    assert second.status_code == 429
-    assert second.json()["error"] == "rate_limited"
-    assert "Retry-After" in second.headers
+    assert second.status_code == 200
+    limiter.reset()
+
+
+def test_write_tools_count_per_request_key(monkeypatch):
+    limiter.reset()
+    monkeypatch.setattr(config, "RATE_LIMIT_PER_MINUTE", 1)
+    bind_request_key("key-a")
+    first = json.loads(asyncio.run(main.cancel_run("missing-a1")))
+    second = json.loads(asyncio.run(main.cancel_run("missing-a2")))
+    bind_request_key("key-b")
+    third = json.loads(asyncio.run(main.cancel_run("missing-b1")))
+    assert first["error"] == "not_found"
+    assert second["error"] == "rate_limited"
+    assert third["error"] == "not_found"
+    current_limit_key.set(LOCAL_KEY)
     limiter.reset()

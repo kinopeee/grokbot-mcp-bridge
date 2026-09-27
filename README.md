@@ -107,7 +107,7 @@ Add an MCP integration in Poke with:
 2. From Poke, call `bridge_status` → `webhook_url_configured` and `webhook_api_key_configured` are `true` (`inbound_webhook_secret_configured` is `false` if you skipped the optional secret — that is fine)
 3. From Poke, call `ask_grokbot` with `payload={"message": "Introduce yourself briefly."}`, `wait_seconds=60`
    - `answer_status: "answered"` → `answer_text` holds the reply
-   - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id, timeout_seconds=180)` (or `cancel_run` to stop)
+   - `answer_status: "pending"` → call `wait_for_grokbot_answer(run_id)` (default 60s, max `MAX_WAIT_SECONDS`) or `cancel_run` to stop
    - `answer_status: "cancelled"` / `"expired"` → do not wait; start a new `ask_grokbot` if needed
 
    Sample result:

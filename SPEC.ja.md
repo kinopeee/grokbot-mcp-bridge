@@ -113,11 +113,11 @@ Grok Bot は回答が用意できたら、受け取った `callback_url` に POS
 | `ALLOWED_HOSTS` | `<app>.fly.dev` | Fly では必須（DNS rebinding 対策と `PUBLIC_BASE_URL` の既定値） |
 | `DB_PATH` | `/data/bridge.db` | イメージでは `/data/bridge.db` が既定（Dockerfile `ENV`）で上書き可能。Fly ではボリューム `bridge_data` を指す |
 | `CALLBACK_ALLOWED_HOSTS` | 受信 `callback_url` の宛先を許可するホスト名（カンマ区切り） | 任意。ただし未設定なら受信 `callback_url` はすべて拒否（フェイルクローズ） |
-| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意。`CALLBACK_TTL_SECONDS`（既定 3600）で pending run を期限切れにする。TTL 内の pending は削除しない |
-| `RUN_RETENTION_SECONDS` | — | 任意。answered / cancelled / expired の run をこの秒数より古ければ削除（既定 604800 = 7 日）。`0` で時間ベースの run 削除を無効化 |
+| `PUBLIC_BASE_URL`, `CALLBACK_TTL_SECONDS`, `CALLBACK_ALLOW_HTTP`, `INBOUND_TIMESTAMP_TOLERANCE_SECONDS` | — | 任意。`CALLBACK_TTL_SECONDS`（既定 3600）で pending run を期限切れにする。TTL 内の pending は削除しない。`0` は即時期限切れ（経過が正なら expired）。`get_grokbot_run` / `list_grokbot_runs` は古い pending を遅延 expire し、wait / cancel と同じ status にする |
+| `RUN_RETENTION_SECONDS` | — | 任意。answered / cancelled / expired の run をこの秒数より古ければ削除（既定 604800 = 7 日）。`0` は時間ベース削除を無効化（`CALLBACK_TTL_SECONDS=0` とは意味が違う） |
 | `EVENT_RETENTION_SECONDS` | — | 任意。この秒数より古い受信イベントを削除（既定 604800）。`0` で無効 |
 | `CLEANUP_INTERVAL_SECONDS` | — | 任意。SQLite 定期クリーンアップ間隔（既定 300）。`0` なら起動時のみ |
-| `RATE_LIMIT_PER_MINUTE` | — | 任意。MCP 認証済み POST と `ask_grokbot` / `cancel_run` の API キー単位上限（既定 30）。`0` で無効。超過時は HTTP `429` および/または `{"error":"rate_limited"}` |
+| `RATE_LIMIT_PER_MINUTE` | — | 任意。`ask_grokbot` と `cancel_run` だけの API キー単位上限（既定 30）。`0` で無効。`tools/list` など読み取りは数えない。超過時はツール JSON `{"error":"rate_limited"}`。リクエストキーが無いプロセス内呼び出しは local バケットを共有。レート制限と waiter はメモリ上の単一プロセス（Fly `ha=false`） |
 | `MAX_WAIT_SECONDS` | — | 任意。`wait_seconds` / `timeout_seconds` の上限（既定 180、ハード上限 300） |
 
 ## 8. 運用手順

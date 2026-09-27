@@ -20,7 +20,7 @@ Devin Review 向けのレビュー方針。このリポジトリは Poke（MCP �
   - `CALLBACK_ALLOW_HTTP=1` はテスト専用の緩和で、http スキームの許可のみ（許可リスト・IP/ポート検査は常に有効）。本番向けコードパスやドキュメントで既定化していないか。
 - **秘密比較** はすべて `hmac.compare_digest` を使う。`==` での比較や、キーの一部をログ・レスポンス・例外メッセージに出す変更は不可。
 - **保持期間** `app/db.py` の `prune_store` は TTL 内の pending run を削除してはならない（明示的な `cancel_run` 以外）。
-- **レート制限** 超過時は HTTP 429 または `{"error":"rate_limited"}`。認証を迂回する実装は不可。
+- **レート制限** `ask_grokbot` / `cancel_run` のみ（API キー hash、またはリクエストキー無しなら local）。`tools/list` は数えない。超過時はツール JSON `{"error":"rate_limited"}`。認証を迂回する実装は不可。
 
 ## 汎用性・命名（AGENTS.md の規約を強制する）
 

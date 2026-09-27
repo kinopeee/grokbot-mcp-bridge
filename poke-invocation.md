@@ -213,7 +213,7 @@ What Poke actually sends (`tools/call`):
 | `cancelled` | Stop waiting. Start a new `ask_grokbot` if you still need an answer |
 | `expired` | The run exceeded `CALLBACK_TTL_SECONDS`. Start a new `ask_grokbot` |
 
-If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missing `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` — check with `bridge_status` first. `"error": "rate_limited"` means wait `retry_after_seconds` and retry (`RATE_LIMIT_PER_MINUTE`, default 30). Duplicate `cancel_run` on an already-cancelled run is idempotent; cancelling an answered or expired run returns `already_answered` / `already_expired`.
+If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missing `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` — check with `bridge_status` first. `"error": "rate_limited"` means wait `retry_after_seconds` and retry (`RATE_LIMIT_PER_MINUTE`, default 30; applies to `ask_grokbot` / `cancel_run` per API key, not `tools/list`). Duplicate `cancel_run` on an already-cancelled run is idempotent; cancelling an answered or expired run returns `already_answered` / `already_expired`.
 
 ### C. End-to-end test steps
 

@@ -213,7 +213,7 @@ Poke が実際に送るもの（`tools/call`）:
 | `cancelled` | 待たない。まだ答えが必要なら新しい `ask_grokbot` を始める |
 | `expired` | `CALLBACK_TTL_SECONDS` を超えた。新しい `ask_grokbot` を始める |
 
-`ask_grokbot` が `"error": "bridge_not_configured"` を返す場合はブリッジに `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` が無い。まず `bridge_status` で確認する。`"error": "rate_limited"` なら `retry_after_seconds` 待って再試行する（`RATE_LIMIT_PER_MINUTE`、既定 30）。既に cancelled の run への `cancel_run` は冪等。answered / expired を cancel すると `already_answered` / `already_expired` になる。
+`ask_grokbot` が `"error": "bridge_not_configured"` を返す場合はブリッジに `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` が無い。まず `bridge_status` で確認する。`"error": "rate_limited"` なら `retry_after_seconds` 待って再試行する（`RATE_LIMIT_PER_MINUTE`、既定 30。`ask_grokbot` / `cancel_run` の API キー単位で、`tools/list` は数えない）。既に cancelled の run への `cancel_run` は冪等。answered / expired を cancel すると `already_answered` / `already_expired` になる。
 
 ### C. 疎通テストの進め方
 
