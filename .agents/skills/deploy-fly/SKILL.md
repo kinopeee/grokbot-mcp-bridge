@@ -20,9 +20,12 @@ description: grokbot-mcp-bridge を Fly.io にデプロイする手順（main �
 
 ```bash
 cd <repo-root>
+git status --porcelain        # 空であること（ローカル差分・未追跡ファイルもイメージに入るため）
 git checkout main && git pull --ff-only
 git log --oneline -1          # これがデプロイされるコミット
 ```
+
+   `git status --porcelain` に出力があるときはデプロイしない（stash するか別の clean な checkout を使う）。
 
 2. テストを通す（CI 済みでも、ローカル差分を含まないことの確認になる）。
 
@@ -47,7 +50,9 @@ curl -sS https://<app>.fly.dev/                    # {"service":"grokbot-mcp-bri
 flyctl logs -a <app> --no-tail | tail -20          # 起動エラーが無いこと
 ```
 
-   `/mcp` の疎通まで見るなら Bearer キー（`MCP_API_KEY` の値）付きで `tools/list` を叩く:
+   `/mcp` も必ず確認する（`MCP_API_KEY` 未設定だと `GET /` は 200 でも `/mcp` は 503 になる）。
+   Bearer キー（Fly secrets の `MCP_API_KEY` の値。環境変数名は環境により異なる）付きで `tools/list` を叩き、
+   `result.tools` にツール一覧が返ることを確認する:
 
 ```bash
 curl -sS https://<app>.fly.dev/mcp \
@@ -69,19 +74,27 @@ curl -sS https://<app>.fly.dev/mcp \
 ## ロールバック
 
 ```bash
-flyctl releases -a <app>                          # 戻したい version の IMAGE を確認（--image で表示）
-flyctl releases -a <app> --image | head -5
+flyctl releases -a <app> --image | head -5        # 戻したい version の image ref を確認
 flyctl deploy -a <app> --image <前の image ref> --ha=false
 ```
+
+`--image` はコードだけを戻し、設定はカレントの `fly.toml` が使われる。戻したい release 以降に `fly.toml`
+（VM サイズ・mounts・http_service など）が変わっている場合は、先に `git checkout <前のコミット> -- fly.toml`
+で当時の設定に戻してから上記を実行する（Fly secrets はデプロイでは変わらないので別途対応）。
 
 ## 初回セットアップ（app が無いときだけ）
 
 ```bash
 flyctl apps create <app>
 flyctl volumes create bridge_data -r nrt -s 1 -a <app> --yes
+# 必須。MCP_API_KEY はここで新規生成する（固定値・例示値をそのまま使わない）。生成した値は Poke 等のクライアント側にも設定する
 flyctl secrets set -a <app> \
-  CURSOR_WEBHOOK_URL=... CURSOR_WEBHOOK_API_KEY=... MCP_API_KEY=... \
-  ALLOWED_HOSTS=<app>.fly.dev CALLBACK_ALLOWED_HOSTS=<必要なホスト>
+  CURSOR_WEBHOOK_URL=<Cursor automation の webhook URL> \
+  CURSOR_WEBHOOK_API_KEY=<Cursor automation の crsr_ キー> \
+  MCP_API_KEY="$(openssl rand -hex 32)" \
+  ALLOWED_HOSTS=<app>.fly.dev
+# 任意。受信 webhook（/hooks/grokbot）から callback_url 付きで呼ぶ運用のときだけ。ask_grokbot だけなら不要
+flyctl secrets set -a <app> CALLBACK_ALLOWED_HOSTS=<許可するコールバック先ホスト>
 flyctl deploy --remote-only --ha=false
 ```
 
