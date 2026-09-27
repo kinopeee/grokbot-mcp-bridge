@@ -196,7 +196,7 @@ Otherwise, POST without a Bearer token. Never forward the incoming webhook's `Au
 1. Register `https://<app>.fly.dev/mcp` (or `/sse`) as an MCP server in Poke
 2. `ask_grokbot` issues a UUID4 per call and puts it in both `run_id` and `request_id` in the payload POSTed to the Grok Bot webhook (caller-supplied values are overwritten)
 3. If the caller does not supply them, the bridge auto-attaches `callback_url` / `reply_url` / `response_url` (the token-scoped `/callbacks/{token}`)
-4. After receiving the callback, resolve the wait for that UUID and return the text to Poke as the MCP `tools/call` result (if it does not arrive within `wait_seconds`, `pending` is returned; collect it with `wait_for_grokbot_answer`)
+4. After receiving the callback, resolve the wait for that UUID and return the text to Poke as the MCP `tools/call` result (if it does not arrive within `wait_seconds` and the run is still pending, `pending` is returned; collect it with `wait_for_grokbot_answer`, or stop with `cancel_run`. `wait_seconds=0` still reads persisted status, so `CALLBACK_TTL_SECONDS=0` yields `expired`)
 
 What Poke actually sends (`tools/call`):
 
@@ -204,14 +204,16 @@ What Poke actually sends (`tools/call`):
 {"name": "ask_grokbot", "arguments": {"payload": {"message": "Introduce yourself briefly."}, "wait_seconds": 60}}
 ```
 
-`payload` is forwarded to the Grok Bot webhook as-is (plus `run_id` / `request_id` / callback URLs), so put the request text in `message`. `wait_seconds` is clamped to 0–120. The result is a JSON string:
+`payload` is forwarded to the Grok Bot webhook as-is (plus `run_id` / `request_id` / callback URLs), so put the request text in `message`. `wait_seconds` is clamped to 0–`MAX_WAIT_SECONDS` (default 180, hard cap 300). The result is a JSON string:
 
 | `answer_status` | What Poke should do |
 |---|---|
 | `answered` | Show `answer_text` |
-| `pending` | Call `wait_for_grokbot_answer` with the returned `run_id` (`timeout_seconds` up to 120); `summary` says so explicitly. `get_grokbot_run(run_id)` returns the same record without waiting |
+| `pending` | Call `wait_for_grokbot_answer` with the returned `run_id` (`timeout_seconds` up to `MAX_WAIT_SECONDS`); `summary` says so explicitly. `get_grokbot_run(run_id)` returns the same `status` / `answer_status` without waiting. Or call `cancel_run(run_id)` to stop |
+| `cancelled` | Stop waiting. Start a new `ask_grokbot` if you still need an answer |
+| `expired` | The run exceeded `CALLBACK_TTL_SECONDS`. Start a new `ask_grokbot` |
 
-If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missing `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` — check with `bridge_status` first.
+If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missing `CURSOR_WEBHOOK_URL` / `CURSOR_WEBHOOK_API_KEY` — check with `bridge_status` first. `"error": "rate_limited"` means wait `retry_after_seconds` and retry (`RATE_LIMIT_PER_MINUTE`, default 30; applies to `ask_grokbot` / `cancel_run` per API key, not `tools/list`). Duplicate `cancel_run` on an already-cancelled run is idempotent; cancelling an answered or expired run returns `already_answered` / `already_expired`.
 
 ### C. End-to-end test steps
 
@@ -229,6 +231,7 @@ If `ask_grokbot` returns `"error": "bridge_not_configured"`, the bridge is missi
 | Appears in chat but the callback fails | URL, authentication, or body shape |
 | Callback 200 with matching UUID, but nothing in Poke | **Bridge → Poke** (logs, MCP forwarding/display) |
 | Callback 409 `already_answered` | That UUID is already answered. Retry with a new run |
+| Callback 409 `already_cancelled` | That UUID was cancelled with `cancel_run`. Start a new run |
 | Response contains only a number like `run_id: 3` | Receipt number. Different from the waiting UUID |
 
 Three things to check on the bridge operator side:

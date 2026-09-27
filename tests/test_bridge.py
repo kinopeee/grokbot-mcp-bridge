@@ -5,9 +5,7 @@ import hmac
 import http.server
 import json
 import logging
-import os
 import socket
-import tempfile
 import threading
 import time
 import urllib.request
@@ -16,26 +14,8 @@ from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
-import pytest
-from fastapi.testclient import TestClient
 
-
-os.environ["MCP_API_KEY"] = "test-mcp"
-os.environ["INBOUND_WEBHOOK_SECRET"] = "test-inbound"
-os.environ["CURSOR_WEBHOOK_URL"] = "https://automation.invalid/hook"
-os.environ["CURSOR_WEBHOOK_API_KEY"] = "x"
-os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "bridge.db")
-os.environ["ALLOWED_HOSTS"] = "testserver"
-os.environ["CALLBACK_ALLOW_HTTP"] = "1"
-os.environ["CALLBACK_ALLOWED_HOSTS"] = "example.com,example.test"
-
-from app import main
-
-
-@pytest.fixture(scope="session")
-def client():
-    with TestClient(main.app) as test_client:
-        yield test_client
+from app import config, main
 
 
 def signed_headers(body: bytes) -> dict[str, str]:
@@ -66,7 +46,13 @@ def test_health_and_mcp_auth_and_tools(client):
         payload = json.loads(data)
     tools = payload["result"]["tools"]
     names = {tool["name"] for tool in tools}
-    assert {"get_grokbot_run", "wait_for_grokbot_answer", "list_grokbot_runs"} <= names
+    assert {
+        "get_grokbot_run",
+        "wait_for_grokbot_answer",
+        "list_grokbot_runs",
+        "cancel_run",
+        "ask_grokbot",
+    } <= names
 
 
 def test_bad_signature(client):
@@ -145,8 +131,8 @@ def test_inbound_delivers_callback(client, monkeypatch):
 
 
 def test_callback_url_safety(monkeypatch):
-    monkeypatch.setattr(main, "CALLBACK_ALLOW_HTTP", False)
-    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", ["example.com"])
+    monkeypatch.setattr(config, "CALLBACK_ALLOW_HTTP", False)
+    monkeypatch.setattr(config, "CALLBACK_ALLOWED_HOSTS", ["example.com"])
     assert main._is_safe_callback_url("https://127.0.0.1/")[0] is False
     assert main._is_safe_callback_url("https://localhost/")[0] is False
     assert main._is_safe_callback_url("http://example.com/")[0] is False
@@ -175,17 +161,17 @@ def test_callback_url_safety(monkeypatch):
             False, "private_address_not_allowed")
 
     # CALLBACK_ALLOW_HTTP relaxes only the scheme, not the IP/port guard.
-    monkeypatch.setattr(main, "CALLBACK_ALLOW_HTTP", True)
+    monkeypatch.setattr(config, "CALLBACK_ALLOW_HTTP", True)
     assert main._is_safe_callback_url("http://example.com/")[0] is False
     monkeypatch.setattr(main.socket, "getaddrinfo", public_dns)
     assert main._is_safe_callback_url("http://example.com/")[0] is True
     assert main._is_safe_callback_url("http://example.com:8080/") == (False, "port_not_allowed")
-    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", ["169.254.169.254", "127.0.0.1"])
+    monkeypatch.setattr(config, "CALLBACK_ALLOWED_HOSTS", ["169.254.169.254", "127.0.0.1"])
     assert main._is_safe_callback_url("http://169.254.169.254/") == (False, "private_address_not_allowed")
     assert main._is_safe_callback_url("http://127.0.0.1/") == (False, "private_address_not_allowed")
 
     # An unset allowlist fails closed.
-    monkeypatch.setattr(main, "CALLBACK_ALLOWED_HOSTS", [])
+    monkeypatch.setattr(config, "CALLBACK_ALLOWED_HOSTS", [])
     assert main._is_safe_callback_url("https://example.com/") == (False, "allowed_hosts_not_configured")
 
 
@@ -516,7 +502,7 @@ def test_expired_callback(client, monkeypatch):
     result = json.loads(asyncio.run(
         main.ask_grokbot({"prompt": "expired"}, wait_seconds=0)
     ))
-    monkeypatch.setattr(main, "CALLBACK_TTL_SECONDS", -1)
+    monkeypatch.setattr(config, "CALLBACK_TTL_SECONDS", -1)
     path = urlparse(result["callback_url"]).path
     response = client.post(path, json={"ok": True, "run_id": result["run_id"]})
     assert response.status_code == 410
